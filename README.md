@@ -1,168 +1,229 @@
 # moonlight-tsp
 
-A Moonlight game-streaming client for the TrimUI Smart Pro (Allwinner A133P)
-that decodes video in hardware. It streams from Sunshine (or GeForce
-Experience) PCs and installs on CrossMix-OS as the app "Moonlight HW".
+moonlight-tsp is a Moonlight game-streaming client for the TrimUI Smart Pro
+(Allwinner A133P). It decodes the video in hardware. It streams from PCs
+with Sunshine (or GeForce Experience). On CrossMix-OS, you install it as the
+app "Moonlight HW".
 
-Other Moonlight builds for this handheld decode in software with FFmpeg and
-upload every frame through the GPU. moonlight-tsp sends the stream to the
-SoC's Cedar video engine, rotates each picture to the portrait panel with
-G2D, and scans it out on a display-engine layer. The CPU never touches the
-pixels.
+Other Moonlight builds for this handheld decode in software with FFmpeg.
+Then they upload each frame through the GPU. moonlight-tsp sends the stream
+to the Cedar video engine of the SoC. G2D rotates each picture to fit the
+portrait panel, and a display-engine layer shows it. The CPU never touches
+the pixels.
 
-Status: early. Tested on one device with CrossMix-OS 1.3.0. Expect rough
-edges.
+Status: early. The only test device is one TrimUI Smart Pro with
+CrossMix-OS 1.3.0. Expect some problems.
 
 ## Screenshots
 
 | Saved PCs | Apps on a PC |
 |---|---|
-| ![The PC list: one PC in game, one offline, one not paired, plus Search for PCs and Add PC by IP address](docs/screenshots/pcs.png) | ![The app list of a PC, with the running app marked](docs/screenshots/apps.png) |
-| **Stream menu (press MENU)** | **Settings** |
-| ![The paused stream menu with Resume, Mouse mode, Send Home button, Disconnect and Quit app, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization](docs/screenshots/settings.png) |
+| ![The PC list: one PC in a game, one PC offline and one PC not paired, then Search for PCs and Add PC by IP address](docs/screenshots/pcs.png) | ![The app list of a PC, with a "running" badge on the app that is open on the PC](docs/screenshots/apps.png) |
 
-These are the app's real screens at the handheld's 1280x720 size, rendered
-by `scripts/ui-screens.sh` with made-up PCs and a stand-in stream engine.
-The figures in the stream menu are sample values, not a measurement. The
-game itself is not shown: it plays on a display layer that a screenshot of
-the interface does not capture.
+| Stream menu (press MENU) | Settings |
+|---|---|
+| ![The paused stream menu with Resume, Mouse mode, Send Home (Guide) button, Disconnect, and Quit app and disconnect, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization](docs/screenshots/settings.png) |
+
+These images are the real screens of the app, at the 1280x720 size of the
+handheld screen. `scripts/ui-screens.sh` made them with sample PCs and a
+test script in place of the stream engine. The figures in the stream menu
+are sample values, not measurements. The images do not show the game,
+because the game plays on a display layer. A screenshot of the interface
+does not include that layer.
 
 ## Compared with the stock client
 
-CrossMix-OS ships Moonlight Embedded 2.6.1 (2023) behind TrimUI's own
-front end. PortMaster's Moonlight New also decodes in software.
+The stock client is the Moonlight app that comes with CrossMix-OS. It is
+Moonlight Embedded 2.6.1 (2023), with a front end from TrimUI. Moonlight
+New from PortMaster also decodes in software.
 
 | | Stock client | moonlight-tsp |
 |---|---|---|
-| Video decoding | Software (FFmpeg) on the CPU, then every frame is uploaded to the GPU | The SoC's Cedar video engine; G2D rotates the picture and a display layer shows it |
-| CPU clock | The launcher pins the CPU at 1.6 GHz (`performance` governor) | Leaves the CPU settings alone |
-| Audio | Through the system mixer, about 85 ms of buffering | Straight to the codec in 5 ms periods with a 40 ms buffer; the volume keys still work |
+| Video decoding | Software (FFmpeg) on the CPU. Then the client uploads each frame to the GPU. | The Cedar video engine of the SoC. G2D rotates the picture, and a display layer shows it. |
+| CPU clock | The launcher holds the CPU at 1.6 GHz (`performance` governor). | No changes to the CPU settings |
+| Audio | Through the system mixer, with about 85 ms of buffering | Directly to the codec in 5 ms periods, with a 40 ms buffer. The volume keys still change the volume. |
 | Moonlight code | Moonlight Embedded 2.6.1 | moonlight-common-c and libgamestream from November 2026, with OpenSSL 3.5 |
 
-Measured on the device at 1280x720 and 60 fps:
+Measurements on the device at 1280x720 and 60 fps:
 
-- Local test streams: each frame is on screen about 4.5 ms after it is
-  submitted, with no frames of decoder lag, at about 7% of one CPU core.
-  A 10-minute run showed no memory growth.
-- Live stream from Sunshine: about 19% of one core for the whole client.
-  Audio is the largest part, about 9% (measured on the slower shared audio
-  path).
-- Wi-Fi power saving, which the client turns off during a stream: in a
-  test during video, turning it off cut the average ping to the router
-  from 59 ms to 12.5 ms and the longest stall from 1.8 s to 0.13 s.
+- Local test streams: each frame is on the screen about 4.5 ms after the
+  client sends it to the decoder. The decoder adds no frames of lag. This
+  uses about 7% of one CPU core. During a 10-minute test, the memory use
+  did not increase.
+- Live stream from Sunshine: the full client uses about 19% of one core.
+  Audio uses the largest part, about 9%. The 9% value is from a test with
+  the slower shared audio path.
+- Wi-Fi power saving: the client turns it off during a stream. In a test
+  during video, this change decreased the average ping time to the router
+  from 59 ms to 12.5 ms. It also decreased the longest stall (a time with
+  no traffic) from 1.8 s to 0.13 s.
 
-Not measured yet: a side-by-side stream against the stock client, so there
-are no figures for how much CPU time or battery it saves.
+There is no side-by-side test against the stock client yet. Thus there
+are no figures for the CPU time or the battery power that moonlight-tsp
+saves.
 
 ## Features
 
-- H.264 and HEVC at 1280x720 (the panel's native size), 30 or 60 fps,
-  5-30 Mbit/s.
-- Hardware decode (Cedar), G2D rotation and a display-engine video layer,
-  with no frame of decoder lag.
-- Low-latency ALSA audio that keeps the system volume keys working.
-- Its own controller-driven UI: PC search (mDNS), add by IP, pairing with a
-  PIN, app list, resume and quit the PC's running app, and settings.
-- Reuses the pairing of the stock Moonlight app on first run, so a PC that
-  is already paired needs no new PIN.
-- In-stream menu on MENU: resume, mouse mode, send Guide, disconnect, and
-  quit the app and disconnect. Holding START+SELECT+L1+R1 for one second
-  disconnects at once.
-- Mouse mode, while MENU is held or switched on in the stream menu: right
-  stick moves the pointer, left stick scrolls, A/L1/R1 left click, B/L2/R2
-  right click, X middle click, Y Enter, d-pad arrow keys.
-- The stream engine runs as a separate process with a watchdog, so a hung
-  stream returns to the UI with a message instead of freezing the device.
-- Leaves the CPU governor alone. Turns Wi-Fi power saving off during
-  streams and back on afterwards (a setting).
+- H.264 and HEVC video at 1280x720 (the native size of the panel), 30 or
+  60 fps, and 5-30 Mbps
+- Hardware decoding (Cedar), G2D rotation and a display-engine video layer,
+  with no frame of decoder lag
+- ALSA audio with low latency. The system volume keys still change the
+  volume.
+- Its own UI, made for the controller. In this UI, you can search for PCs
+  (mDNS), add a PC by its IP address, pair with a PIN, and change the
+  settings. You can also start an app from the app list, and resume or
+  quit the app that is open on the PC.
+- Pairing data from the stock Moonlight app. At its first start, Moonlight
+  HW copies this pairing, so a PC that is already paired does not need a
+  new PIN.
+- A stream menu (press MENU) with Resume, Mouse mode, Send Home (Guide)
+  button, Disconnect, and Quit app and disconnect. If you hold
+  START+SELECT+L1+R1 for one second, the client disconnects at once.
+- Mouse mode, while you hold MENU or after you set "Mouse mode: On" in the
+  stream menu. The right stick moves the pointer, and the left stick
+  scrolls. A, L1 and R1 give a left click. B, L2 and R2 give a right click.
+  X gives a middle click, Y sends Enter, and the D-pad sends the arrow keys.
+- A separate process for the stream engine, with a watchdog in the UI. If
+  the engine does not respond, the watchdog stops it, and the UI shows a
+  message. The device does not freeze.
+- No changes to the CPU governor
+- Wi-Fi power saving off during a stream, and on again after it. A setting
+  controls this.
 
 ## Requirements
 
-- A TrimUI Smart Pro running CrossMix-OS. Only CrossMix-OS 1.3.0 has been
-  tested.
-- A PC running [Sunshine](https://github.com/LizardByte/Sunshine) (the only
-  host tested) on the same network as the handheld.
+- A TrimUI Smart Pro with CrossMix-OS. CrossMix-OS 1.3.0 is the only
+  tested version.
+- A PC with [Sunshine](https://github.com/LizardByte/Sunshine), on the same
+  network as the handheld. Sunshine is the only tested streaming server.
 
 ## Install
 
 1. Download the latest `trimui-moonlight-tsp-<version>.zip` from the
    Releases page.
-2. Turn the handheld off, take out the SD card and put it in your
-   computer.
-3. Extract the zip at the root of the SD card. It holds
-   `Apps/MoonlightTSP/`, so the app lands in the card's `Apps` folder. If
-   your unzip tool puts everything in an extra folder named after the zip,
-   move `MoonlightTSP` into the card's `Apps` folder yourself.
-4. Put the card back, turn the handheld on and open **Moonlight HW** from
-   the Apps menu.
+2. Turn off the handheld.
+3. Put the SD card of the handheld into your computer.
+4. Extract the zip to the root of the SD card. The zip holds
+   `Apps/MoonlightTSP/`, so the app goes into the `Apps` folder of the
+   card.
+5. Some unzip tools put the files into an extra folder with the name of
+   the zip. If your tool does this, move `MoonlightTSP` into the `Apps`
+   folder of the card.
+6. Put the SD card back into the handheld.
+7. Turn on the handheld.
+8. Open "Moonlight HW" from the Apps menu.
 
-To update, install a newer zip the same way and replace the old files.
-Settings, pairing and logs are kept on the handheld's internal storage in
-`/mnt/UDISK/trimui-tools/moonlight-tsp/`, so updates keep them.
+To update the app, install a newer zip with the same steps. The new files
+replace the old files. The app keeps its settings, pairing data and logs
+in the internal storage of the handheld, in
+`/mnt/UDISK/trimui-tools/moonlight-tsp/`. Thus an update does not erase
+them.
 
-To remove the app, delete `Apps/MoonlightTSP/` from the SD card and
-`/mnt/UDISK/trimui-tools/moonlight-tsp/` from internal storage (for
-example over SSH). The PC still lists the handheld as paired until you
-remove it in Sunshine.
+To remove the app, delete `Apps/MoonlightTSP/` from the SD card. Then
+delete `/mnt/UDISK/trimui-tools/moonlight-tsp/` from the internal storage,
+for example over SSH. The PC shows the handheld as paired until you remove
+the handheld in Sunshine.
 
 ## First use
 
-1. **Add your PC.** With no saved PCs, the app opens **Search for PCs**.
-   It lists the Sunshine PCs on your network and shows whether each one is
-   paired. Select yours and press A to add it. If it is not listed, press
-   B and choose **Add PC by IP address** in the PC list: A types the
-   selected key, Y deletes, START saves.
-2. **Pair.** In the PC list, select the PC and press A. If it is not
-   paired yet, the app shows a four-digit PIN and the PC's name and
-   address. Open that PC's Sunshine web interface, go to its PIN page and
-   enter the PIN (any device name works). The app waits up to 5 minutes
-   and goes on by itself once the PC accepts the PIN.
-3. **Stream.** The PC's app list opens. Select a game or app and press A.
-   If a different app is already running on the PC, you are asked before
-   it is quit.
+### Add your PC
 
-If the stock Moonlight app was paired with a PC, Moonlight HW copies that
-pairing on first use: the PC shows as paired in the search and needs no
-PIN.
+If there are no saved PCs, the app opens "Search for PCs". This screen
+lists the Sunshine PCs on your network and shows if each PC is paired.
+Press A on your PC to add it.
 
-| Where | Buttons |
+If your PC is not in the list, add it by its IP address:
+
+1. Press B to go to the PC list.
+2. Press A on "Add PC by IP address".
+3. Type the IP address of the PC. A types the selected key, and Y deletes
+   the last character.
+4. Press START to save the address.
+
+### Pair with the PC
+
+1. In the PC list, press A on the PC. If the PC is not paired, the app
+   shows a four-digit PIN and the name and address of the PC.
+2. Open the PIN page in the Sunshine web UI of that PC.
+3. Type the PIN on that page. You can use a device name of your choice.
+
+When the PC accepts the PIN, the app list of the PC opens. The PIN screen
+waits for 5 minutes at most.
+
+If the stock Moonlight app is paired with a PC, Moonlight HW copies that
+pairing at its first start. The search then shows the PC as paired, and
+you do not need a PIN for it.
+
+### Start a stream
+
+In the app list, press A on a game or an app. If a different app is open
+on the PC, Moonlight HW asks you before it quits that app.
+
+| Screen | Buttons |
 |---|---|
-| PC list | A open, X settings, Y remove the PC from the list, SELECT check the PCs again, B leave the app |
-| App list | A start or resume, Y quit the app running on the PC, X settings, B back |
-| Stream | Press MENU for the stream menu (B resumes). Hold MENU to use the pad as a mouse. Hold START+SELECT+L1+R1 for one second to disconnect at once. |
+| PC list | A open, Y remove the PC from the list, X settings, SELECT refresh the status of all PCs, B exit the app |
+| App list | A start or resume, Y quit the app that is open on the PC, X settings, B back |
+| Stream | Press MENU for the stream menu (B resumes the stream). Hold MENU to use the pad as a mouse. To disconnect at once, hold START+SELECT+L1+R1 for one second. |
 
-Settings, with the default first: frame rate (60 fps, or 30), bitrate
-(10 Mbit/s; 5 to 30), video codec (Automatic, HEVC or H.264), swap A/B and
-X/Y during streams (off: buttons act by position, like an Xbox pad), quit
-the PC app on disconnect (off), Wi-Fi power saving off while streaming
-(on, recommended), and let the PC optimize game settings (off).
+### Settings
+
+To open the settings, press X in the PC list or in the app list.
+
+| Setting | Default | Other values |
+|---|---|---|
+| Frame rate | 60 fps | 30 fps |
+| Bitrate | 10 Mbps | 5 to 30 Mbps |
+| Video codec | Automatic | HEVC, H.264 |
+| Swap A/B and X/Y | Off: the bottom button sends A, as on an Xbox pad | On: each button sends its printed letter |
+| Quit the PC app on disconnect | Off | On |
+| Wi-Fi power saving off while streaming | On (recommended) | Off |
+| Let the PC optimize game settings | Off | On |
 
 ## Troubleshooting
 
-- **Pairing fails, or Sunshine says no device is waiting to pair:** the
-  request goes only to the PC named on the PIN screen. Enter the PIN in
-  that PC's Sunshine within 5 minutes, then open the PC again to retry.
-- **A PC shows as offline:** check that the PC is on and Sunshine is
-  running. Press A on it to try again, or SELECT to check every PC.
-- **"The CPU Performance scene holds the CPU at 2 GHz and uses more
-  battery."** at the top of the PC list: the handheld's CPU Performance
-  scene is on and holds the CPU at 2 GHz while any app runs. Moonlight HW
-  never changes CPU settings itself, so turn the scene off on the handheld
-  if you want longer battery life.
-- **A stream stops with a message:** the message gives the reason. A
-  stream stops by itself about 10 seconds after the PC becomes
-  unreachable. If the stream process stops responding, a watchdog closes
-  it and writes `hang.log` instead of letting the handheld freeze.
-- **Logs** are in `/mnt/UDISK/trimui-tools/moonlight-tsp/logs/`:
-  `ui.log`, `launcher.log`, `engine.log` and `stream.log`, each with a
-  `.1` copy from the previous run, and `hang.log` if the watchdog closed a
-  stream. Please attach them to bug reports.
+### Pairing does not complete
+
+This section also applies if Sunshine says that no device waits for
+pairing. The app sends the pairing request only to the PC that the PIN
+screen names. Type the PIN in Sunshine on that PC within 5 minutes. If the
+pairing does not complete, open the PC again in the PC list to get a new
+PIN.
+
+### A PC shows as offline
+
+Make sure that the PC and Sunshine are on. Then press A on the PC to try
+again. To refresh the status of all PCs, press SELECT.
+
+### The PC list shows a CPU Performance message
+
+The message "The CPU Performance scene holds the CPU at 2 GHz and uses
+more battery." at the top of the PC list shows that the CPU Performance
+scene of the handheld is on. This scene holds the CPU at 2 GHz in all
+apps. Moonlight HW never changes the CPU settings. If you want a longer
+battery life, turn off the scene on the handheld.
+
+### A stream stops with a message
+
+The message gives the reason. If the PC does not answer for about 10
+seconds, the stream stops by itself. If the stream engine does not
+respond, the watchdog stops it and writes `hang.log`. Thus the handheld
+does not freeze.
+
+### Logs
+
+The logs are in `/mnt/UDISK/trimui-tools/moonlight-tsp/logs/`. The folder
+has `ui.log`, `launcher.log`, `engine.log` and `stream.log`. Each log has
+a `.1` copy from the previous session. If the watchdog stopped a stream,
+the folder also has `hang.log`. If you report a bug, attach these logs to
+the report.
 
 ## Build
 
-Requirements: Docker with `linux/arm64` support (native on Apple silicon,
-QEMU elsewhere), plus `zip`, `shasum` and ImageMagick (`magick`) on the
-host for packaging.
+To build the app, you need Docker with `linux/arm64` support. This
+support is native on Apple silicon and comes from QEMU on other
+computers. To make the package, you also need `zip`, `shasum` and
+ImageMagick (`magick`) on your computer.
 
 ```sh
 sh scripts/fetch-third-party.sh          # pinned sources, SHA-256 checked
@@ -171,17 +232,21 @@ sh scripts/docker-build.sh check         # host-side tests
 sh scripts/package.sh                    # dist/trimui-moonlight-tsp-<version>.zip
 ```
 
-The build runs in a Debian bullseye container, so the binaries need only
-glibc 2.30 and run on the device's glibc 2.33. OpenSSL, curl, expat, uuid
-and Opus are linked statically; ALSA and the device's own SDL2/SDL2_ttf
-are linked dynamically, and the vendor CedarC libraries are loaded at run
-time. The build is reproducible: OpenSSL's build date and the Debian base
-image are pinned, so a clean checkout rebuilds the released binaries byte
-for byte, and two package builds give identical zips. The icon is rendered
-by the host's ImageMagick, so a different version of it can change
-`icon.png`.
-`scripts/ui-screens.sh` renders every UI screen in the container without a
-device; the screenshots above are four of them.
+The build uses a Debian bullseye container. Thus the binaries need only
+glibc 2.30, and the device has glibc 2.33. The build links OpenSSL, curl,
+expat, uuid and Opus statically. It links ALSA and the SDL2/SDL2_ttf
+libraries of the device dynamically. The stream engine loads the vendor
+CedarC libraries at run time.
+
+The build is reproducible: the same sources always give the same files.
+The build pins the build date of OpenSSL and the Debian base image. Thus a
+clean checkout gives the released binaries byte for byte, and two package
+builds give the same zip. ImageMagick on your computer makes the icon.
+Thus a different ImageMagick version can change `icon.png`.
+
+`scripts/ui-screens.sh` makes an image of each UI screen in the container,
+without a device. The four images in the Screenshots section come from
+this script.
 
 ## Layout
 
@@ -193,22 +258,25 @@ device; the screenshots above are four of them.
 | `src/ui_*.c` | `moonlight-tsp-ui`: the SDL2 interface |
 | `include/` | vendor ABI headers (CedarC 1.3.0, sunxi disp2, G2D) with layout checks |
 | `package/` | launcher and icon |
-| `tests/` | host tests (`make check`) and the UI screen script |
+| `tests/` | tests for the build computer (`make check`) and the UI screen script |
 | `tools/` | device test tools (`tsp-videotest`, `tsp-probe`, `tsp-mdns`) |
 | `docs/development-notes.md` | design, measurements and development log |
 
 ## License and credits
 
-GPL-3.0-or-later (see `LICENSE`). The stream protocol is
-[moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c),
-and pairing and the app list use `libgamestream` from
+The license is GPL-3.0-or-later (see `LICENSE`). The stream protocol comes
+from
+[moonlight-common-c](https://github.com/moonlight-stream/moonlight-common-c).
+Pairing and the app list use `libgamestream` from
 [moonlight-embedded](https://github.com/moonlight-stream/moonlight-embedded).
-The exact versions of these and of enet, nanors, OpenSSL and curl are
-pinned in `third_party.lock`; their notices ship in the package's
-`licenses/` folder. The design was informed by
-[moonlight-allwinner-h618](https://github.com/uselesscodestoo/moonlight-allwinner-h618)
-(branch `k2b-cedarc-disp`), which shows Cedar-decoded video on a display
-layer on the H618 with a newer CedarC and kernel.
+`third_party.lock` pins the exact versions of these libraries and of enet,
+nanors, OpenSSL and curl. The license notices of these libraries are in
+the `licenses/` folder of the package.
 
-This project is not affiliated with the Moonlight project, TrimUI or
+The design uses ideas from
+[moonlight-allwinner-h618](https://github.com/uselesscodestoo/moonlight-allwinner-h618)
+(branch `k2b-cedarc-disp`). That project shows Cedar-decoded video on a
+display layer on the H618, with a newer CedarC and kernel.
+
+This project is independent of the Moonlight project, TrimUI and
 CrossMix-OS.
