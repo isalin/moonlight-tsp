@@ -3,7 +3,10 @@
 #
 # Bullseye security updates have moved to archive.debian.org; the
 # deb.debian.org index still lists them but the pool returns 404.
-FROM debian:bullseye
+#
+# The base is pinned to the image 0.2.0 was built with. Bullseye's
+# security support ended in August 2026, so its packages no longer change.
+FROM debian:bullseye@sha256:6f519a81440354a85eb592c5f32109ab80605f6b892455983a6f618bf87fabe9
 RUN sed -i 's|http://deb.debian.org/debian-security|http://archive.debian.org/debian-security|' /etc/apt/sources.list \
  && apt-get update \
  && apt-get install -y --no-install-recommends \

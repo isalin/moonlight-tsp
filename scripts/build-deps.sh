@@ -9,8 +9,13 @@ work=${DEPS_WORK:-/out/deps-build}
 jobs=$(nproc)
 openssl=openssl-3.5.9
 curl=curl-8.23.0
+# OpenSSL writes its build time into libcrypto ("built on: ..."), which
+# made every fresh checkout build a different engine. Fix it at the time
+# 0.2.0's dependencies were built (2026-11-14 21:46:49 UTC), so a clean
+# build reproduces the released engine byte for byte.
+export SOURCE_DATE_EPOCH=1794692809
 
-stamp=$deps/.stamp-$openssl-$curl
+stamp=$deps/.stamp-$openssl-$curl-$SOURCE_DATE_EPOCH
 [ -f "$stamp" ] && { touch "$deps/.built"; exit 0; }
 rm -rf "$deps" "$work"
 mkdir -p "$deps" "$work"

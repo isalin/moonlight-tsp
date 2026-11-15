@@ -24,7 +24,8 @@ ui: $(UI)
 DEPS = $(BUILD)/deps
 DEPS_STAMP = $(DEPS)/.built
 deps: $(DEPS_STAMP)
-$(DEPS_STAMP):
+# The script skips the build when its own versioned stamp is present.
+$(DEPS_STAMP): scripts/build-deps.sh
 	SRC=$(CURDIR) DEPS=$(DEPS) DEPS_WORK=$(BUILD)/deps-build \
 		sh scripts/build-deps.sh
 

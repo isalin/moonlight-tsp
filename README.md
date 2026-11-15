@@ -64,7 +64,11 @@ The build runs in a Debian bullseye container, so the binaries need only
 glibc 2.30 and run on the device's glibc 2.33. OpenSSL, curl, expat, uuid
 and Opus are linked statically; ALSA and the device's own SDL2/SDL2_ttf
 are linked dynamically, and the vendor CedarC libraries are loaded at run
-time. Two package builds produce byte-identical zips.
+time. The build is reproducible: OpenSSL's build date and the Debian base
+image are pinned, so a clean checkout rebuilds the released binaries byte
+for byte, and two package builds give identical zips. The icon is rendered
+by the host's ImageMagick, so a different version of it can change
+`icon.png`.
 `scripts/ui-screens.sh` renders every UI screen in the container without a
 device.
 

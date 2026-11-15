@@ -577,7 +577,8 @@ DE import cache were back at the baseline after every run unless noted.
   `third_party.lock`).
 - The script fails if the engine stops exporting `SemTimedWait` or if
   either binary needs a library other than glibc, ALSA or the device's
-  SDL2/SDL2_ttf, and it runs `make check`. Two runs give the same zip.
+  SDL2/SDL2_ttf, and it runs `make check`. Two runs give the same zip,
+  and a clean checkout builds the same binaries (see "Build notes").
   0.2.0 (mouse mode, with the code review's input fixes) is
   `e47859339a164ad36df6d485555388ad6f9ff936ade9766272604d371c7526a5`,
   with UI `781d5bf1…` and engine `06a220b1…` (the first 0.2.0 build,
@@ -950,7 +951,23 @@ through the menu; the audio drops and xruns are not explained yet.
 - The Mac has no `readelf`/`objdump`; run binutils inside that image.
 - `make deps` (`scripts/build-deps.sh`) builds static OpenSSL 3.5.9 and curl
   8.23.0 into `build/deps` once (about 1.5 minutes). curl 8.18 and later
-  require OpenSSL 3. Delete `build/deps` after changing their versions.
+  require OpenSSL 3. `make` reruns the script when it changes, and the
+  script rebuilds when its stamp (both versions and `SOURCE_DATE_EPOCH`)
+  is missing. Before 2026-11-15 the Makefile only checked `.built`, so a
+  version bump needed `build/deps` deleted by hand.
+- Reproducible from a clean checkout (checked 2026-11-15): a fresh clone,
+  a Docker image built with `--no-cache`, `fetch-third-party.sh` and
+  `package.sh` gave exactly the installed 0.2.0 binaries (UI `781d5bf1…`,
+  engine `06a220b1…`). Before that, only rebuilds in the same folder
+  matched: OpenSSL writes its build time into libcrypto
+  (`built on: Sat Nov 14 21:46:49 2026 UTC`), and a fresh `build/deps`
+  got a new one, which also changed the build ID. `build-deps.sh` now sets
+  `SOURCE_DATE_EPOCH=1794692809` (that original time), and the Dockerfile
+  pins `debian:bullseye` to the digest 0.2.0 was built with. The zip can
+  still differ between machines: `icon.png` is rendered by the host's
+  ImageMagick (7.1.2-25 here). If Debian moves bullseye off
+  deb.debian.org, point the Dockerfile's main sources at archive.debian.org
+  too.
 - Third-party sources compile with their own warning level and enet's
   configure results as `-D` flags; `HAVE_CLOCK_GETTIME` makes common-c use
   `CLOCK_MONOTONIC_RAW` instead of the adjustable wall clock (upstream's

@@ -88,8 +88,11 @@ contract when the fix is installed.
   only under that lock and through `sync_host()`, and keep
   `tests/input-test.c` (`make check`) passing after any input change.
 - Keep the package reproducible: two runs of `scripts/package.sh` must give
-  the same zip hash. The UI and engine versions (`UI_VERSION`,
-  `ENGINE_VERSION`) must match.
+  the same zip hash, and a fresh clone must build the same binaries. Keep
+  every build input pinned (`third_party.lock`, the base image digest in
+  `docker/Dockerfile`, `SOURCE_DATE_EPOCH` in `scripts/build-deps.sh`);
+  anything that embeds a date or a host path breaks this. The UI and
+  engine versions (`UI_VERSION`, `ENGINE_VERSION`) must match.
 
 Update `docs/development-notes.md` whenever new device facts or diagnostic
 results are learned.
