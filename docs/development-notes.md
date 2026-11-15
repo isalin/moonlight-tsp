@@ -625,6 +625,11 @@ DE import cache were back at the baseline after every run unless noted.
   `build/shots/` (PNG).
   `MLTSP_FONT_FILE=/tmp/tsp-libs/regular.ttf` uses a copy of the device font
   (not redistributed); without it DejaVu Sans is used.
+- The README screenshots in `docs/screenshots/` are shots 05 (`pcs.png`),
+  06 (`apps.png`), 12 (`stream-menu.png`) and 08 (`settings.png`) from a
+  run with the device font, copied with
+  `magick IN -strip -define png:compression-level=9 OUT` so the files hold
+  only image data. Re-render them when those screens change.
 - The 2026-11-15 run walked first start, saved PCs, apps, switch-app dialog,
   settings, connecting, streaming, the stream menu and disconnect, pairing,
   a dropped connection, a failed stage, removal, an unreachable PC, the

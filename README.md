@@ -13,6 +13,20 @@ pixels.
 Status: early. Tested on one device with CrossMix-OS 1.3.0. Expect rough
 edges.
 
+## Screenshots
+
+| Saved PCs | Apps on a PC |
+|---|---|
+| ![The PC list: one PC in game, one offline, one not paired, plus Search for PCs and Add PC by IP address](docs/screenshots/pcs.png) | ![The app list of a PC, with the running app marked](docs/screenshots/apps.png) |
+| **Stream menu (press MENU)** | **Settings** |
+| ![The paused stream menu with Resume, Mouse mode, Send Home button, Disconnect and Quit app, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimisation](docs/screenshots/settings.png) |
+
+These are the app's real screens at the handheld's 1280x720 size, rendered
+by `scripts/ui-screens.sh` with made-up PCs and a stand-in stream engine.
+The figures in the stream menu are sample values, not a measurement. The
+game itself is not shown: it plays on a display layer that a screenshot of
+the interface does not capture.
+
 ## Compared with the stock client
 
 CrossMix-OS ships Moonlight Embedded 2.6.1 (2023) behind TrimUI's own
@@ -167,7 +181,7 @@ for byte, and two package builds give identical zips. The icon is rendered
 by the host's ImageMagick, so a different version of it can change
 `icon.png`.
 `scripts/ui-screens.sh` renders every UI screen in the container without a
-device.
+device; the screenshots above are four of them.
 
 ## Layout
 
