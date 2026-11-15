@@ -488,18 +488,24 @@ static CONNECTION_LISTENER_CALLBACKS listener = {
     .connectionStatusUpdate = cl_status,
 };
 
+/* Shown to the user in the UI's "Disconnected" dialog. */
 static const char *term_reason(int code)
 {
     switch (code) {
-    case ML_ERROR_GRACEFUL_TERMINATION: return "host ended the stream";
+    case ML_ERROR_GRACEFUL_TERMINATION: return "The PC ended the stream.";
     case ML_ERROR_NO_VIDEO_TRAFFIC:
-        return "no video received (host firewall?)";
-    case ML_ERROR_NO_VIDEO_FRAME: return "network too slow for this bitrate";
+        return "No video came from the PC. Make sure that its firewall does "
+               "not block the stream.";
+    case ML_ERROR_NO_VIDEO_FRAME:
+        return "The network is too slow for this bitrate. Set a lower "
+               "bitrate in Settings.";
     case ML_ERROR_UNEXPECTED_EARLY_TERMINATION:
-        return "host video capture error";
-    case ML_ERROR_PROTECTED_CONTENT: return "protected content on host";
-    case ML_ERROR_FRAME_CONVERSION: return "host frame conversion error";
-    default: return "connection lost";
+        return "Video capture on the PC stopped with an error.";
+    case ML_ERROR_PROTECTED_CONTENT:
+        return "The PC cannot capture protected content.";
+    case ML_ERROR_FRAME_CONVERSION:
+        return "Frame conversion on the PC stopped with an error.";
+    default: return "This device lost the connection to the PC.";
     }
 }
 
@@ -916,7 +922,7 @@ static int cmd_stream(PSERVER_DATA srv, const char *app)
     switch (why) {
     case STOP_TERMINATED:
         rc = atomic_load(&g_term_code);
-        printf("stopped: %s (%d)\n", term_reason(rc), rc);
+        printf("stopped: error %d: %s\n", rc, term_reason(rc));
         ipc_send("term %d %s", rc, term_reason(rc));
         break;
     case STOP_COMBO: printf("stopped: exit combo\n"); break;

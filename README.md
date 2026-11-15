@@ -19,7 +19,7 @@ edges.
 |---|---|
 | ![The PC list: one PC in game, one offline, one not paired, plus Search for PCs and Add PC by IP address](docs/screenshots/pcs.png) | ![The app list of a PC, with the running app marked](docs/screenshots/apps.png) |
 | **Stream menu (press MENU)** | **Settings** |
-| ![The paused stream menu with Resume, Mouse mode, Send Home button, Disconnect and Quit app, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimisation](docs/screenshots/settings.png) |
+| ![The paused stream menu with Resume, Mouse mode, Send Home button, Disconnect and Quit app, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization](docs/screenshots/settings.png) |
 
 These are the app's real screens at the handheld's 1280x720 size, rendered
 by `scripts/ui-screens.sh` with made-up PCs and a stand-in stream engine.
@@ -135,7 +135,7 @@ Settings, with the default first: frame rate (60 fps, or 30), bitrate
 (10 Mbit/s; 5 to 30), video codec (Automatic, HEVC or H.264), swap A/B and
 X/Y during streams (off: buttons act by position, like an Xbox pad), quit
 the PC app on disconnect (off), Wi-Fi power saving off while streaming
-(on, recommended), and let the PC optimise game settings (off).
+(on, recommended), and let the PC optimize game settings (off).
 
 ## Troubleshooting
 
@@ -144,11 +144,11 @@ the PC app on disconnect (off), Wi-Fi power saving off while streaming
   that PC's Sunshine within 5 minutes, then open the PC again to retry.
 - **A PC shows as offline:** check that the PC is on and Sunshine is
   running. Press A on it to try again, or SELECT to check every PC.
-- **"CPU Performance mode is on: 2 GHz, shorter battery life"** at the
-  top of the PC list: the handheld's CPU Performance scene is on and holds
-  the CPU at 2 GHz while any app runs. Moonlight HW never changes CPU
-  settings itself, so turn the scene off on the handheld if you want
-  longer battery life.
+- **"The CPU Performance scene holds the CPU at 2 GHz and uses more
+  battery."** at the top of the PC list: the handheld's CPU Performance
+  scene is on and holds the CPU at 2 GHz while any app runs. Moonlight HW
+  never changes CPU settings itself, so turn the scene off on the handheld
+  if you want longer battery life.
 - **A stream stops with a message:** the message gives the reason. A
   stream stops by itself about 10 seconds after the PC becomes
   unreachable. If the stream process stops responding, a watchdog closes

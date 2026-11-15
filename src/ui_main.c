@@ -187,7 +187,7 @@ static struct {
     int err_code;
     char err_text[96];
     int got_term, term_code;
-    char term_text[96];
+    char term_text[160];
     char stage[96];
     int app_id;
     char app_name[64];
@@ -595,7 +595,7 @@ static void start_pair(int host)
 {
     U.pin[0] = '\0';
     if (job_start(J_PAIR, host, "pair", NULL, T_PAIR) != 0) {
-        message("Cannot pair", "The stream engine could not be started.");
+        message("Cannot pair", "The stream engine did not start.");
         return;
     }
     busy("Pairing", "Contacting the PC...", 1);
@@ -604,8 +604,7 @@ static void start_pair(int host)
 static void start_list(int host, int user)
 {
     if (job_start(J_LIST, host, "list", NULL, T_LIST) != 0) {
-        message("Cannot load apps", "The stream engine could not be "
-                                    "started.");
+        message("Cannot load apps", "The stream engine did not start.");
         return;
     }
     J.user_list = user;
@@ -620,7 +619,7 @@ static void start_stream(int app_id, const char *name)
     job_cancel();
     snprintf(id, sizeof(id), "%d", app_id);
     if (job_start(J_STREAM, U.host, "stream", id, T_CONNECT) != 0) {
-        message("Cannot stream", "The stream engine could not be started.");
+        message("Cannot stream", "The stream engine did not start.");
         return;
     }
     J.app_id = app_id;
@@ -634,8 +633,7 @@ static void start_quit(void)
 {
     job_cancel();
     if (job_start(J_QUIT, U.host, "quit", NULL, T_QUIT) != 0) {
-        message("Cannot quit the app", "The stream engine could not be "
-                                       "started.");
+        message("Cannot quit the app", "The stream engine did not start.");
         return;
     }
     busy("Quitting app", host_name(U.host), 0);
@@ -645,39 +643,40 @@ static const char *err_message(char *buf, size_t max)
 {
     switch (J.err) {
     case E_UNREACHABLE:
-        snprintf(buf, max, "No answer from %s (%s). Check that the PC is on "
-                 "and Sunshine is running.", host_name(J.host),
+        snprintf(buf, max, "%s (%s) did not answer. Make sure that the PC "
+                 "and Sunshine are on.", host_name(J.host),
                  U.cfg.hosts[J.host].addr);
         break;
     case E_PAIR_FAILED:
-        snprintf(buf, max, "Pairing did not complete. Enter the PIN in "
-                 "Sunshine's web UI (PIN page) and try again.");
+        snprintf(buf, max, "Pairing did not complete. Open the PC again to "
+                 "get a new PIN.");
         break;
     case E_OTHER_APP:
-        snprintf(buf, max, "Another app is running on the PC. Quit it "
+        snprintf(buf, max, "Another app is open on the PC. Quit that app "
                  "first.");
         break;
     case E_LAUNCH:
-        snprintf(buf, max, "The PC could not start the app (error %d).",
+        snprintf(buf, max, "The PC did not start the app (error %d).",
                  J.err_code);
         break;
     case E_STAGE:
         if (J.stage[0])
-            snprintf(buf, max, "The connection failed during the %s stage "
-                     "(error %d).", J.stage, J.err_code);
+            snprintf(buf, max, "The connection did not complete the %s "
+                     "stage (error %d).", J.stage, J.err_code);
         else
-            snprintf(buf, max, "The connection failed (error %d).",
-                     J.err_code);
+            snprintf(buf, max, "The connection to the PC did not start "
+                     "(error %d).", J.err_code);
         break;
     case E_CONNECT:
-        snprintf(buf, max, "The connection to the PC failed (error %d).",
+        snprintf(buf, max, "The connection to the PC did not start "
+                 "(error %d).",
                  J.err_code);
         break;
     case E_QUIT:
         snprintf(buf, max, "The PC did not quit the app.");
         break;
     default:
-        snprintf(buf, max, "Something went wrong. The log is in %s.",
+        snprintf(buf, max, "An unknown error occurred. The logs are in %s.",
                  U.logdir);
         break;
     }
@@ -774,9 +773,10 @@ static void job_finished(void)
         } else {
             go_hosts();
             if (J.killed == K_TIMEOUT)
-                snprintf(buf, sizeof(buf), "No PIN was entered in Sunshine "
-                         "on %s (%s) within 5 minutes.", host_name(h),
-                         U.cfg.hosts[h].addr);
+                snprintf(buf, sizeof(buf), "Sunshine on %s (%s) did not "
+                         "get the PIN in %d minutes. Open the PC again to "
+                         "get a new PIN.", host_name(h), U.cfg.hosts[h].addr,
+                         T_PAIR / 60000);
             else
                 err_message(buf, sizeof(buf));
             message("Pairing failed", buf);
@@ -795,7 +795,7 @@ static void job_finished(void)
                 err_message(buf, sizeof(buf));
                 if (J.killed == K_TIMEOUT)
                     snprintf(buf, sizeof(buf), "The PC did not answer.");
-                message("Could not quit the app", buf);
+                message("Cannot quit the app", buf);
             }
             go_apps(1);
         }
@@ -812,20 +812,26 @@ static void job_finished(void)
         ui_pad_drain(&U.pad);
         U.scr = S_APPS;
         if (J.killed == K_WATCHDOG) {
-            message("Stream closed", "The stream stopped responding and was "
-                    "closed.");
+            snprintf(buf, sizeof(buf), "The stream engine did not respond "
+                     "for %d seconds. Moonlight HW stopped it and wrote "
+                     "hang.log in %s.", T_HEARTBEAT / 1000, U.logdir);
+            message("Stream closed", buf);
         } else if (J.killed == K_TIMEOUT && !J.started) {
-            message("Connection failed", "The stream did not start in "
-                    "time.");
+            snprintf(buf, sizeof(buf), "The stream did not start in %d "
+                     "seconds.", T_CONNECT / 1000);
+            message("Connection failed", buf);
         } else if (J.killed == K_CANCEL) {
             /* the user cancelled */
         } else if (WIFSIGNALED(st)) {
-            snprintf(buf, sizeof(buf), "The stream engine crashed (signal "
-                     "%d). The log is in %s.", WTERMSIG(st), U.logdir);
+            snprintf(buf, sizeof(buf), "The stream engine stopped with "
+                     "signal %d. The logs are in %s.", WTERMSIG(st),
+                     U.logdir);
             message("Stream closed", buf);
         } else if (J.got_term && J.term_code != 0) {
-            snprintf(buf, sizeof(buf), "%s (%d)", J.term_text[0] ?
-                     J.term_text : "The connection was lost", J.term_code);
+            snprintf(buf, sizeof(buf), "%s The error code is %d.",
+                     J.term_text[0] ? J.term_text :
+                     "This device lost the connection to the PC.",
+                     J.term_code);
             dialog("Disconnected", buf, after_stream_dialog, "OK", NULL);
         } else if (!J.started && J.err != E_NONE) {
             message("Cannot stream", err_message(buf, sizeof(buf)));
@@ -1094,7 +1100,8 @@ static void start_search(void)
 {
     if (U.md.fd < 0 && mdns_open(&U.md) != 0) {
         U.md.fd = -1;
-        message("Search failed", "Could not open a network socket.");
+        message("Cannot search", "The network socket for the search did "
+                "not open. Make sure that Wi-Fi is on.");
         return;
     }
     if (J.kind == J_PROBE)
@@ -1152,7 +1159,8 @@ static void add_host_and_check(const char *addr, const char *name,
     int i = config_add_host(&U.cfg, addr, name);
 
     if (i < 0) {
-        message("Cannot add PC", "The host list is full.");
+        message("Cannot add PC", "The PC list is full. Remove a PC from the "
+                "list first.");
         return;
     }
     memset(&U.hs[i], 0, sizeof(U.hs[i]));
@@ -1252,44 +1260,45 @@ static void setting_text(int i, const char **label, char *value, size_t max,
     case 0:
         *label = "Frame rate";
         snprintf(value, max, "%d fps", c->fps);
-        *help = "30 fps saves battery and network; 60 fps is smoother.";
+        *help = "30 fps uses less battery and network data. 60 fps gives "
+                "smoother motion.";
         break;
     case 1:
         *label = "Bitrate";
         snprintf(value, max, "%d Mbps", c->bitrate / 1000);
-        *help = "Higher is sharper but needs a strong Wi-Fi signal. 10 Mbps "
-                "suits 720p.";
+        *help = "A higher bitrate gives a sharper picture but needs a strong "
+                "Wi-Fi signal. 10 Mbps is good for 720p.";
         break;
     case 2:
         *label = "Video codec";
         snprintf(value, max, "%s", c->codec == CODEC_HEVC ? "HEVC" :
                  c->codec == CODEC_H264 ? "H.264" : "Automatic");
-        *help = "Automatic lets the PC choose (HEVC when it can). Both are "
-                "decoded in hardware.";
+        *help = "Automatic lets the PC choose (HEVC when it can). The "
+                "hardware decodes both codecs.";
         break;
     case 3:
         *label = "Swap A/B and X/Y";
         snprintf(value, max, "%s", c->swap_abxy ? "On" : "Off");
-        *help = "Off: buttons act by position (bottom = Xbox A). On: by "
-                "printed label.";
+        *help = "Off: the bottom button sends A, as on an Xbox pad. On: each "
+                "button sends its printed letter.";
         break;
     case 4:
         *label = "Quit the PC app on disconnect";
         snprintf(value, max, "%s", c->quit_after ? "On" : "Off");
-        *help = "Off keeps the game running on the PC so you can resume "
+        *help = "Off keeps the app open on the PC, so you can resume it "
                 "later.";
         break;
     case 5:
         *label = "Wi-Fi power saving off while streaming";
         snprintf(value, max, "%s", c->wifi_ps_off ? "On" : "Off");
-        *help = "Recommended: removes Wi-Fi stalls. Uses a little more "
-                "battery; restored after the stream.";
+        *help = "On (recommended) prevents Wi-Fi stalls but uses a little "
+                "more battery during the stream.";
         break;
     default:
-        *label = "Let the PC optimise game settings";
+        *label = "Let the PC optimize game settings";
         snprintf(value, max, "%s", c->sops ? "On" : "Off");
-        *help = "Lets Sunshine/GeForce Experience change game settings for "
-                "this resolution.";
+        *help = "If On, Sunshine or GeForce Experience can change the game "
+                "settings for this resolution.";
         break;
     }
 }
@@ -1382,8 +1391,8 @@ static void addip_key(enum ui_key k)
             if (inet_pton(AF_INET, U.ip, &a) == 1)
                 add_host_and_check(U.ip, U.ip, NULL);
             else
-                message("Not an address", "Enter an IPv4 address such as "
-                        "192.168.0.10.");
+                message("Not an address", "Type an IPv4 address, for "
+                        "example 192.168.0.10.");
             break;
         }
         if (keypad[s] == '<') {
@@ -1441,10 +1450,11 @@ static void apps_key(enum ui_key k)
             if (U.apps[i].id == running)
                 break;
         {
-            char text[160];
+            char text[200];
 
-            snprintf(text, sizeof(text), "Quit %s on %s? Unsaved progress "
-                     "is lost.", i < U.napps ? U.apps[i].name : "the app",
+            snprintf(text, sizeof(text), "Quit %s on %s? You will lose "
+                     "unsaved progress.", i < U.napps ? U.apps[i].name :
+                     "the app",
                      host_name(U.host));
             dialog("Quit app", text, quit_running_done, "Quit", "Cancel");
             U.dlg.sel = 1;
@@ -1457,7 +1467,7 @@ static void apps_key(enum ui_key k)
             struct app *a = &U.apps[U.lv_apps.sel];
 
             if (running != 0 && running != a->id) {
-                char text[200];
+                char text[240];
 
                 for (i = 0; i < U.napps; i++)
                     if (U.apps[i].id == running)
@@ -1465,9 +1475,9 @@ static void apps_key(enum ui_key k)
                 U.pending_app = a->id;
                 snprintf(U.pending_name, sizeof(U.pending_name), "%s",
                          a->name);
-                snprintf(text, sizeof(text), "%s is running. Quit it and "
-                         "start %s?", i < U.napps ? U.apps[i].name :
-                         "Another app", a->name);
+                snprintf(text, sizeof(text), "Quit %s and start %s? You "
+                         "will lose unsaved progress.", i < U.napps ?
+                         U.apps[i].name : "the open app", a->name);
                 dialog("Switch app", text, switch_app_done, "Quit and start",
                        "Cancel");
                 U.dlg.sel = 1;
@@ -1505,7 +1515,7 @@ static void hosts_key(enum ui_key k)
             char text[160];
 
             snprintf(text, sizeof(text), "Remove %s (%s) from the list? "
-                     "Pairing on the PC is kept.", U.cfg.hosts[s].name,
+                     "The PC keeps the pairing.", U.cfg.hosts[s].name,
                      U.cfg.hosts[s].addr);
             dialog("Remove PC", text, remove_host_done, "Remove", "Cancel");
             U.dlg.sel = 1;
@@ -1584,7 +1594,7 @@ static void cancel_job_from_ui(void)
         engine_signal(&U.eng, SIGTERM);
         J.deadline = 0;
         J.kill_at = now_ms() + T_TERM_GRACE;
-        busy("Cancelling", J.app_name, 0);
+        busy("Canceling", J.app_name, 0);
         return;
     }
     if (J.kind == J_PAIR || J.kind == J_LIST) {
@@ -1733,11 +1743,11 @@ static void render_hosts(void)
     };
 
     draw_header("Moonlight HW", U.perf_scene ? NULL :
-                "v" UI_VERSION " - hardware decoding");
+                "v" UI_VERSION ", hardware decoding");
     if (U.perf_scene)
         draw_text(F_SMALL, UI_W - 48, 32, C_WARN,
-                  "CPU Performance mode is on: 2 GHz, shorter battery life",
-                  AL_RIGHT, 760);
+                  "The CPU Performance scene holds the CPU at 2 GHz and "
+                  "uses more battery.", AL_RIGHT, 840);
     list_clamp(l, n);
     for (i = l->top; i < n && i < l->top + LIST_ROWS; i++) {
         int sel = i == l->sel;
@@ -1750,7 +1760,7 @@ static void render_hosts(void)
 
             if (s->st == H_ONLINE && s->paired)
                 st = "online";
-            snprintf(right, sizeof(right), "%s  -  %s", U.cfg.hosts[i].addr,
+            snprintf(right, sizeof(right), "%s, %s", U.cfg.hosts[i].addr,
                      st);
             draw_row(i - l->top, sel, U.cfg.hosts[i].name, right, col,
                      s->st == H_ONLINE && s->paired && s->running ?
@@ -1767,7 +1777,8 @@ static void render_hosts(void)
     draw_scrollbar(l, n);
     if (U.cfg.nhosts == 0)
         draw_text(F_SMALL, UI_W / 2, 560, C_DIM, "No PCs yet. Start "
-                  "Sunshine on your PC, then search or add it by address.",
+                  "Sunshine on your PC. Then search for it, or add it by its "
+                  "IP address.",
                   AL_CENTER, 1150);
     if (l->sel < U.cfg.nhosts)
         draw_hints(h1, 5);
@@ -1795,20 +1806,20 @@ static void render_search(void)
         for (j = 0; j < U.cfg.nhosts; j++)
             if (strcmp(U.cfg.hosts[j].addr, U.md.r[i].addr) == 0)
                 saved = 1;
-        snprintf(right, sizeof(right), "%s  -  %s", U.md.r[i].addr, st);
+        snprintf(right, sizeof(right), "%s, %s", U.md.r[i].addr, st);
         draw_row(i - l->top, i == l->sel, U.md.r[i].name, right, col,
                  saved ? "saved" : NULL, C_DIM);
     }
     if (U.md.n > 0 && U.md.n < LIST_ROWS)
         draw_text(F_SMALL, LIST_X + 8, LIST_Y + U.md.n * ROW_PITCH + 12, C_DIM,
-                  "A \"paired\" PC already accepts this device; adding any "
-                  "other PC asks for a PIN to enter in its Sunshine.", AL_LEFT,
+                  "A \"paired\" PC already accepts this device. Other PCs "
+                  "need a PIN that you type in Sunshine.", AL_LEFT,
                   LIST_W - 16);
     if (U.md.n == 0)
         draw_centered_note(U.search_end ? "Searching..." :
                            "No PCs found",
-                           U.search_end ? NULL : "Check that Sunshine is "
-                           "running, or add the PC by its IP address.");
+                           U.search_end ? NULL : "Make sure that Sunshine "
+                           "is on, or add the PC by its IP address.");
     draw_hints(U.md.n > 0 ? h : h + 1, nh);
 }
 
@@ -1887,7 +1898,7 @@ static void render_pair(void)
     char line[200];
 
     draw_header("Pairing", NULL);
-    snprintf(line, sizeof(line), "Enter this PIN in Sunshine on %s (%s):",
+    snprintf(line, sizeof(line), "Type this PIN in Sunshine on %s (%s):",
              host_name(J.host), U.cfg.hosts[J.host].addr);
     draw_text(F_BODY, UI_W / 2, 140, C_TEXT, line, AL_CENTER, 1180);
     for (i = 0; i < 4 && U.pin[i] != '\0'; i++) {
@@ -1898,11 +1909,14 @@ static void render_pair(void)
         draw_text(F_HUGE, x + w / 2, 220 + (200 - draw_font_height(F_HUGE)) / 2,
                   C_ACCENT, d, AL_CENTER, 0);
     }
-    draw_text(F_SMALL, UI_W / 2, 470, C_DIM, "In Sunshine's web UI open the "
-              "PIN page; any device name works. Only that PC sees this "
+    draw_text(F_SMALL, UI_W / 2, 470, C_DIM, "Open the PIN page in the "
+              "Sunshine web UI. You can use a device name of your choice.",
+              AL_CENTER, 1180);
+    draw_text(F_SMALL, UI_W / 2, 506, C_DIM, "Only that PC gets this "
               "request.", AL_CENTER, 1180);
-    draw_text(F_SMALL, UI_W / 2, 510, C_DIM, "This screen closes when "
-              "pairing is done (waits up to 5 minutes).", AL_CENTER, 1180);
+    snprintf(line, sizeof(line), "This screen closes after the PC accepts "
+             "the PIN. It waits for %d minutes at most.", T_PAIR / 60000);
+    draw_text(F_SMALL, UI_W / 2, 542, C_DIM, line, AL_CENTER, 1180);
     draw_hints(h, 1);
 }
 
@@ -1910,10 +1924,11 @@ static void render_busy(void)
 {
     static const struct hint h[] = { { "B", "Cancel" } };
     char el[32];
+    uint64_t now = now_ms();
 
     draw_header(U.busy_title, NULL);
     snprintf(el, sizeof(el), "%llu s",
-             (unsigned long long)((now_ms() - U.busy_since) / 1000));
+             (unsigned long long)(ms_since(now, U.busy_since) / 1000));
     draw_centered_note(U.busy_text, el);
     if (U.busy_cancel)
         draw_hints(h, 1);
@@ -1925,16 +1940,19 @@ static void render_connecting(void)
 {
     static const struct hint h[] = { { "B", "Cancel" } };
     char title[128], sub[160];
+    uint64_t now = now_ms();
 
     snprintf(title, sizeof(title), "Starting %s", J.app_name);
     draw_header(title, host_name(J.host));
-    snprintf(sub, sizeof(sub), "%s  -  %llu s", J.stage[0] ? J.stage :
+    snprintf(sub, sizeof(sub), "%s, %llu s", J.stage[0] ? J.stage :
              "contacting the PC",
-             (unsigned long long)((now_ms() - J.start) / 1000));
+             (unsigned long long)(ms_since(now, J.start) / 1000));
     draw_centered_note("Connecting...", sub);
-    draw_text(F_SMALL, UI_W / 2, 560, C_DIM, "During the stream, press MENU "
-              "for options or hold it for the mouse. Hold START+SELECT+L+R "
-              "to disconnect.", AL_CENTER, 1180);
+    draw_text(F_SMALL, UI_W / 2, 540, C_DIM, "During the stream, press MENU "
+              "for the stream menu, or hold MENU to use the pad as a mouse.",
+              AL_CENTER, 1180);
+    draw_text(F_SMALL, UI_W / 2, 576, C_DIM, "To disconnect at once, hold "
+              "START+SELECT+L1+R1 for one second.", AL_CENTER, 1180);
     draw_hints(h, 1);
 }
 
@@ -1943,10 +1961,10 @@ static void render_menu(void)
     static const struct hint h[] = {
         { "A", "Select" }, { "B", "Resume" },
     };
-    char title[128], line[160];
+    char title[128];
     int i, x = 720, y = LIST_Y;
 
-    snprintf(title, sizeof(title), "Paused - %s", J.app_name);
+    snprintf(title, sizeof(title), "Paused: %s", J.app_name);
     draw_header(title, host_name(J.host));
     for (i = 0; i < MENU_N; i++) {
         int ry = LIST_Y + i * ROW_PITCH;
@@ -1976,15 +1994,16 @@ static void render_menu(void)
             draw_text(F_SMALL, x + 24, y + 62 + i * 34, C_DIM, b[i],
                       AL_LEFT, 470);
     }
-    snprintf(line, sizeof(line), "Hold MENU during play to use the pad as "
-             "a mouse: A/L1/R1 click, B/L2/R2 right-click, X middle,");
-    draw_text(F_SMALL, LIST_X, 520, C_DIM, line, AL_LEFT, 1200);
-    snprintf(line, sizeof(line), "Y Enter, d-pad arrow keys, right stick "
-             "pointer, left stick scroll. Mouse mode keeps it on.");
-    draw_text(F_SMALL, LIST_X, 554, C_DIM, line, AL_LEFT, 1200);
-    snprintf(line, sizeof(line), "Hold START+SELECT+L+R during play to "
-             "disconnect at once.");
-    draw_text(F_SMALL, LIST_X, 600, C_DIM, line, AL_LEFT, 1200);
+    draw_text(F_SMALL, LIST_X, 504, C_DIM, "Hold MENU during play to use the "
+              "pad as a mouse. \"Mouse mode: On\" keeps the mouse on.",
+              AL_LEFT, 1200);
+    draw_text(F_SMALL, LIST_X, 536, C_DIM, "Right stick: pointer. Left stick: "
+              "scroll. A, L1, R1: left click. B, L2, R2: right click.",
+              AL_LEFT, 1200);
+    draw_text(F_SMALL, LIST_X, 568, C_DIM, "X: middle click. Y: Enter. D-pad: "
+              "arrow keys.", AL_LEFT, 1200);
+    draw_text(F_SMALL, LIST_X, 602, C_DIM, "Hold START+SELECT+L1+R1 for one "
+              "second during play to disconnect at once.", AL_LEFT, 1200);
     draw_hints(h, 2);
 }
 

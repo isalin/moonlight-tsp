@@ -526,8 +526,16 @@ DE import cache were back at the baseline after every run unless noted.
   once. It starts off in every stream. If another app is running on the PC, the UI asks before quitting it.
 - Settings: 30/60 fps, 5/8/10/15/20/30 Mbit/s, codec Automatic/HEVC/H.264,
   swap A/B and X/Y, quit the PC app on disconnect, Wi-Fi power saving off
-  while streaming (on by default), let the PC optimise game settings (off).
+  while streaming (on by default), let the PC optimize game settings (off).
   Resolution is fixed at the native 1280x720.
+- On-screen text follows ASD-STE100 Simplified Technical English (since
+  2026-11-15): short sentences, simple tenses, active voice, no semicolons,
+  "make sure that" instead of "check", "PC" (not "host") and "type" for
+  PIN and address entry. Labels (titles, buttons, hints, badges, setting
+  names) are names and stay short. The engine's stop reasons
+  (`term_reason()`) are full sentences, because the "Disconnected" dialog
+  shows them as they are, followed by "The error code is N."; `stream.log`
+  prints them as `stopped: error N: TEXT`.
 - Every host action is a separate engine run (`info`, `list`, `pair`,
   `quit`, `stream`) on a socketpair `--ipc-fd`, with timeouts (info 6 s,
   list 15 s, pair 300 s, quit 15 s, connect 60 s). The PIN screen names the

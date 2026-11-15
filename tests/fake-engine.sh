@@ -87,7 +87,7 @@ stream)
         { [ $t = 2 ] || [ "$t" = "${menu_at:-}" ]; } &&
             [ -n "${FAKE_MENU:-}" ] && say "menu"
         if [ -n "${FAKE_TERM:-}" ] && [ $t = 3 ]; then
-            say "term -1 the connection to the host was lost"
+            say "term -1 This device lost the connection to the PC."
             say "ended"
             exit 0
         fi
