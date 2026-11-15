@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="300" viewBox="0 0 300 300">
+  <!-- Plain shapes only: ImageMagick's built-in SVG renderer ignores masks. -->
+  <rect x="10" y="10" width="280" height="280" rx="56" fill="#18202e"/>
+  <path d="M135.18 52.14 A88 88 0 1 0 219.26 178.24 A76 76 0 0 1 135.18 52.14 Z"
+        fill="#7fb2ff"/>
+  <path d="M176 170 L176 246 L240 208 Z" fill="#ffffff"/>
+</svg>
