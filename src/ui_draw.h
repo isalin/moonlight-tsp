@@ -15,6 +15,12 @@
 enum ui_font { F_SMALL, F_BODY, F_TITLE, F_HUGE, F_COUNT };
 enum ui_align { AL_LEFT, AL_CENTER, AL_RIGHT };
 
+/* Icons made at their display size. The Wi-Fi layers share one size and
+ * position, so each one can have its own colour. */
+enum ui_icon {
+    IC_WIFI_DOT, IC_WIFI_ARC1, IC_WIFI_ARC2, IC_WIFI_ARC3, IC_BOLT, IC_COUNT
+};
+
 /* Colours are 0xRRGGBBAA. */
 int draw_init(void);
 void draw_quit(void);
@@ -23,6 +29,9 @@ void draw_clear(uint32_t rgba);
 void draw_rect(int x, int y, int w, int h, uint32_t rgba);
 void draw_round_rect(int x, int y, int w, int h, int r, uint32_t rgba);
 void draw_disc(int cx, int cy, int r, uint32_t rgba);
+/* Draws icon IC at its own size with its top-left corner at X, Y. */
+void draw_icon(enum ui_icon ic, int x, int y, uint32_t rgba);
+void draw_icon_size(enum ui_icon ic, int *w, int *h);
 
 /*
  * Draws S with its top-left (or centre/right edge) at X, Y; shortens it

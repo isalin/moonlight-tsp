@@ -18,7 +18,7 @@ CrossMix-OS 1.3.0. Expect some problems.
 
 | Saved PCs | Apps on a PC |
 |---|---|
-| ![The PC list: one PC in a game, one PC offline and one PC not paired, then Search for PCs and Add PC by IP address](docs/screenshots/pcs.png) | ![The app list of a PC, with a "running" badge on the app that is open on the PC](docs/screenshots/apps.png) |
+| ![The PC list: one PC in a game, one PC offline and one PC not paired, then Search for PCs and Add PC by IP address. The Wi-Fi signal and the battery level are at the top right](docs/screenshots/pcs.png) | ![The app list of a PC, with a "running" badge on the app that is open on the PC](docs/screenshots/apps.png) |
 
 | Stream menu (press MENU) | Settings |
 |---|---|
@@ -92,6 +92,9 @@ saves.
   controls this.
 - Updates from GitHub. When the app starts, it checks for a newer version
   and asks you before it installs it. A setting turns off this check.
+- Battery level and Wi-Fi signal at the top right of the menus and of the
+  stream menu. The app reads them every 5 seconds, and never during a
+  stream. It does not start a Wi-Fi scan to get the signal.
 
 ## Requirements
 
@@ -235,9 +238,9 @@ again. To refresh the status of all PCs, press SELECT.
 
 ### The PC list shows a CPU Performance message
 
-The message "The CPU Performance scene holds the CPU at 2 GHz and uses
-more battery." at the top of the PC list shows that the CPU Performance
-scene of the handheld is on. This scene holds the CPU at 2 GHz in all
+The message "The CPU Performance scene is on. It uses more battery." at
+the top of the PC list shows that the CPU Performance scene of the
+handheld is on. This scene holds the CPU at 2 GHz in all
 apps. Moonlight HW never changes the CPU settings. If you want a longer
 battery life, turn off the scene on the handheld.
 
@@ -318,7 +321,7 @@ release. All installed copies then offer the release at their next start.
 | `src/video_cedar.c`, `cedar*.c`, `g2d_rot.c`, `disp.c`, `ion.c` | video: Cedar decode, G2D rotation, display layer, ION buffers |
 | `src/audio_alsa.c`, `src/input_evdev.c`, `src/wifi_ps.c` | audio, controller and mouse input, Wi-Fi power saving |
 | `src/update.c`, `src/update_manifest.c` | updates: the GitHub check, the download, its checks and the stage folder |
-| `src/ui_*.c` | `moonlight-tsp-ui`: the SDL2 interface |
+| `src/ui_*.c` | `moonlight-tsp-ui`: the SDL2 interface, with the battery and Wi-Fi status (`ui_status.c`) |
 | `include/` | vendor ABI headers (CedarC 1.3.0, sunxi disp2, G2D) with layout checks |
 | `package/` | launcher, installer for updates (`update.sh`) and icon |
 | `tests/` | tests for the build computer (`make check`), the UI screen script and the updater tests |

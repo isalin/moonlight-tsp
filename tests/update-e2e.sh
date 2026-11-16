@@ -117,6 +117,8 @@ said() {
 no_stage() { [ ! -e "$stage" ]; }
 
 echo "engine: $("$engine" --version)"
+# The installed version; the test releases 0.9.x are newer.
+cur=$("$engine" --version | cut -d' ' -f2)
 
 # ---- update-check
 run update-check
@@ -128,15 +130,15 @@ latest 0.2.0
 run update-check
 said "older release" 'none 0\.2\.0$'
 
-release 0.3.0
-latest 0.3.0
+release "$cur"
+latest "$cur"
 run update-check
-said "same release" 'none 0\.3\.0$'
+said "same release" "none $(echo "$cur" | sed 's/\./\\./g')\$"
 
-release 0.3.1
-latest 0.3.1
+release 0.9.1
+latest 0.9.1
 run update-check
-said "newer release" "available 0\\.3\\.1 $(stat -c %s "$www/v0.3.1/trimui-moonlight-tsp-0.3.1.zip") Test release 0\\.3\\.1$"
+said "newer release" "available 0\\.9\\.1 $(stat -c %s "$www/v0.9.1/trimui-moonlight-tsp-0.9.1.zip") Test release 0\\.9\\.1$"
 check "redirects followed" grep -q "GET /redirect/latest/update.txt" "$t/server.log"
 
 CA=$t/other.pem run update-check
@@ -157,66 +159,66 @@ echo "<html>not a manifest</html>" >"$www/v9.0.0/update.txt"
 latest 9.0.0
 run update-check
 said "not a manifest" 'error The update information on GitHub is not valid\.'
-latest 0.3.1
+latest 0.9.1
 
 # ---- update-fetch
-run update-fetch 0.3.1
-said "fetch: staged" 'staged 0\.3\.1$'
+run update-fetch 0.9.1
+said "fetch: staged" 'staged 0\.9\.1$'
 check "fetch: status 0" test "$rc" = 0
 said "fetch: progress" 'progress [0-9]+ [0-9]+$'
 said "fetch: verify" 'verify$'
-check "fetch: ready file" test "$(cat "$stage/ready" 2>/dev/null)" = "0.3.1 0.3.0"
+check "fetch: ready file" test "$(cat "$stage/ready" 2>/dev/null)" = "0.9.1 $cur"
 check "fetch: new app" test -x "$stage/new/Apps/MoonlightTSP/moonlight-tsp-stream"
 check "fetch: no zip left" test ! -e "$stage/download.zip" -a \
     ! -e "$stage/download.zip.part" -a ! -e "$stage/new.tmp"
 
 touch "$stage/previous" "$stage/failed"
-run update-fetch 0.3.1
-said "fetch again over a stage" 'staged 0\.3\.1$'
+run update-fetch 0.9.1
+said "fetch again over a stage" 'staged 0\.9\.1$'
 check "fetch again: old stage files gone" test ! -e "$stage/previous" -a \
     ! -e "$stage/failed"
 rm -rf "$stage"
 
-release 0.3.2
-manifest 0.3.2 0.3.2 "$(stat -c %s "$www/v0.3.2/trimui-moonlight-tsp-0.3.2.zip")" \
+release 0.9.2
+manifest 0.9.2 0.9.2 "$(stat -c %s "$www/v0.9.2/trimui-moonlight-tsp-0.9.2.zip")" \
     0000000000000000000000000000000000000000000000000000000000000000
-run update-fetch 0.3.2
+run update-fetch 0.9.2
 said "wrong sha256" 'error The download is damaged\. Try again\.'
 check "wrong sha256: stage removed" no_stage
 
-release 0.3.3
-manifest 0.3.3 0.3.3 1000 \
-    "$(sha256sum "$www/v0.3.3/trimui-moonlight-tsp-0.3.3.zip" | cut -d' ' -f1)"
-run update-fetch 0.3.3
+release 0.9.3
+manifest 0.9.3 0.9.3 1000 \
+    "$(sha256sum "$www/v0.9.3/trimui-moonlight-tsp-0.9.3.zip" | cut -d' ' -f1)"
+run update-fetch 0.9.3
 said "longer than the manifest" 'error The download is damaged \(too large\)'
 check "too large: stage removed" no_stage
 
 touch "$www/short"
-run update-fetch 0.3.1
+run update-fetch 0.9.1
 said "cut-off download" 'error The download stopped\. Make sure that Wi-Fi is on'
 
 check "cut-off: stage removed" no_stage
 rm -f "$www/short"
 
-release 0.3.4 0.3.3
-run update-fetch 0.3.4
-said "programs report another version" 'error Version 0\.3\.4 does not start on this device\.'
+release 0.9.4 0.9.3
+run update-fetch 0.9.4
+said "programs report another version" 'error Version 0\.9\.4 does not start on this device\.'
 check "does not start: stage removed" no_stage
 
-release 0.3.5 0.3.5 update.sh
-run update-fetch 0.3.5
+release 0.9.5 0.9.5 update.sh
+run update-fetch 0.9.5
 said "no update.sh in the zip" 'error The download is not a Moonlight HW package\.'
 
-mkdir -p "$www/v0.3.6"
-cp "$www/v0.3.1/update.txt" "$www/v0.3.6/update.txt"
-run update-fetch 0.3.6
+mkdir -p "$www/v0.9.6"
+cp "$www/v0.9.1/update.txt" "$www/v0.9.6/update.txt"
+run update-fetch 0.9.6
 said "manifest of another version" 'error The update information on GitHub is not valid\.'
 
-mkdir -p "$www/v0.3.7"
-head -c 5000 /dev/urandom >"$www/v0.3.7/trimui-moonlight-tsp-0.3.7.zip"
-manifest 0.3.7 0.3.7 5000 \
-    "$(sha256sum "$www/v0.3.7/trimui-moonlight-tsp-0.3.7.zip" | cut -d' ' -f1)"
-run update-fetch 0.3.7
+mkdir -p "$www/v0.9.7"
+head -c 5000 /dev/urandom >"$www/v0.9.7/trimui-moonlight-tsp-0.9.7.zip"
+manifest 0.9.7 0.9.7 5000 \
+    "$(sha256sum "$www/v0.9.7/trimui-moonlight-tsp-0.9.7.zip" | cut -d' ' -f1)"
+run update-fetch 0.9.7
 said "not a zip" 'error The download did not unpack'
 check "not a zip: stage removed" no_stage
 
@@ -224,10 +226,10 @@ run update-fetch 0.9.9
 said "no such release" 'error Version 0\.9\.9 is not on GitHub\.'
 check "no such release: no stage made" no_stage
 
-run update-fetch ../0.3.1
-said "bad version argument" 'error Version "\.\./0\.3\.1" is not valid\.'
+run update-fetch ../0.9.1
+said "bad version argument" 'error Version "\.\./0\.9\.1" is not valid\.'
 
-STAGE=$t/sd/elsewhere run update-fetch 0.3.1
+STAGE=$t/sd/elsewhere run update-fetch 0.9.1
 said "stage with another name" 'error The stage folder must be called'
 check "stage with another name: not made" test ! -e "$t/sd/elsewhere"
 

@@ -635,11 +635,13 @@ DE import cache were back at the baseline after every run unless noted.
   command it receives to `ipc.log`; the script checks that choosing
   "Mouse mode" sends `mouse on` followed by `resume`, and the fake engine
   reports another MENU press 2 s later (shot 12b shows "Mouse mode: On").
-  It saves 38 screenshots to
+  It saves 41 screenshots to
   `build/shots/` (PNG). Shots 26-36 cover updates: the two settings rows,
   the manual check (busy, newest, error), the offer, the download, a
   stopped and a failed download, and the "installed" and "rolled back"
-  messages. The script also checks that the start-up check runs once, that
+  messages. Every run sends `status 78 discharging -55` first, so each
+  header shows the status icons; shots 37-39 show a low battery with a
+  weak signal, charging without Wi-Fi, and no battery. The script also checks that the start-up check runs once, that
   the UI exits with status 3 after `update staged`, that Skip writes
   `update_skip` and that "Off" runs no check.
   `MLTSP_FONT_FILE=/tmp/tsp-libs/regular.ttf` uses a copy of the device font
@@ -762,6 +764,59 @@ signing (2026-11-16).
   itself. While the new version runs, `update.sh` waits as its parent and
   the stage holds `previous/` and `started`; it removes the stage when the
   app exits.
+
+### Status indicator (0.3.1)
+
+The user asked for battery and Wi-Fi status at the top right of the menus
+and the Paused screen (2026-11-16).
+
+- Sources, checked on the handheld: the battery is the first
+  `/sys/class/power_supply/*` entry with `type` Battery and `present` not
+  0 (`axp2202-battery`); `capacity` (clamped to 0-100) and `status`
+  ("Charging" or "Full" show the bolt). `axp2202-usb/online` read 1 while
+  the battery said Discharging, so the USB supply is not used. There is no
+  `/proc/net/wireless` (no WEXT), so the signal comes from nl80211.
+- `src/ui_status.c` (no SDL; unit-tested by `tests/status-test.c`) reads
+  `/sys/class/net/wlan0/operstate`: missing hides the icon, anything other
+  than `up`/`unknown` shows "not connected". When up, it sends one generic
+  netlink `NL80211_CMD_GET_STATION` dump for the ifindex (the family id is
+  resolved once with `CTRL_CMD_GETFAMILY`) and reads
+  `NL80211_STA_INFO_SIGNAL_AVG`, else `_SIGNAL`. The dump reads the
+  station table that the driver already keeps: no scan, nothing sent over
+  the air, and wpa_supplicant (with the OBSS filter) never sees it. No
+  process is started. The socket stays open between polls (`SOCK_CLOEXEC`,
+  `SO_RCVTIMEO` 200 ms) and is reopened after any error, so a late reply
+  cannot confuse the next request. If netlink fails while the link is up,
+  the header shows full bars and the log gets one note.
+- Bars: 3 at -60 dBm or more, 2 at -70, 1 at -80, else 0. A level goes up
+  only 2 dB past its threshold, so the icon does not flap.
+- Polling: every 5 s (`T_STATUS`) on screens other than `S_STREAM`, and
+  never during a stream: `status_at` adds to the poll timeout only outside
+  it. Leaving a stream finds `status_at` past, so the Paused screen gets
+  fresh values before its first frame. The UI redraws and logs a
+  `status: battery 62%, wifi -51 dBm (3 bars)` line only when the shown
+  state changes.
+- Drawing: the container's SDL 2.0.14 has no `SDL_RenderGeometry`, so the
+  Wi-Fi arcs and the bolt are 4x4-supersampled mask textures
+  (`make_mask` in `src/ui_draw.c`, which also makes the disc), tinted per
+  layer. The battery is drawn with rounded rectangles: C_OK while
+  charging, C_ERR at 10% or less, C_WARN at 20% or less.
+- Header layout (`draw_header_c`): the status cluster is right-aligned at
+  `UI_W-48`; the title gets at most `min(760, sx-80)`, the right text ends
+  28 px left of the cluster and is dropped below 60 px. The CPU
+  Performance warning became "The CPU Performance scene is on. It uses
+  more battery." so it fits.
+- The debug FIFO command `status PCT|none charging|discharging
+  DBM|off|none` sets fixed values and stops polling (UI tests).
+  `status-test --live [IFNAME]` prints the real values on the handheld.
+- On the handheld (2026-11-17, device clock CST) with a 0.3.0.1 test build
+  (higher than 0.3.0, lower than 0.3.1): `status-test --live wlan0` printed
+  57% and -54 dBm, the same as `capacity`/`status` and `iw dev wlan0 link`
+  (-54 dBm, 2452 MHz). The UI logged `status: battery 57%, wifi -57 dBm (3
+  bars)` at 00:13:56. The user looked at the menus and the Paused screen
+  in three short streams and approved the layout. Idle in the menus with
+  no state change, the UI used 4 ticks of CPU in 60 s (about 0.07% of one
+  core), with the 5 s poll included.
 
 ## First launch on the device
 

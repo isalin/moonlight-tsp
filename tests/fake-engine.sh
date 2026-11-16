@@ -33,7 +33,7 @@ update-check)
     echo "update-check" >> "$state/updates.log"
     sleep "${FAKE_UPDATE_DELAY:-0}"
     case ${FAKE_UPDATE:-} in
-    available) say "update available 0.3.1 4312345 Faster pairing and a new stream menu" ;;
+    available) say "update available 0.9.0 4312345 Faster pairing and a new stream menu" ;;
     error) say "update error The connection to GitHub failed. Make sure that Wi-Fi is on."
            exit 1 ;;
     *) say "update none 0.3.0" ;;

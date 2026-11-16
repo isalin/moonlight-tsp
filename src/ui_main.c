@@ -31,8 +31,9 @@
 #include "ui_engine.h"
 #include "ui_mdns.h"
 #include "ui_pad.h"
+#include "ui_status.h"
 
-#define UI_VERSION "0.3.0"
+#define UI_VERSION "0.3.1"
 #define DEFAULT_DATA "/mnt/UDISK/trimui-tools/moonlight-tsp"
 /* launch.sh sets MLTSP_STAGE to this folder on the app's SD card. */
 #define DEFAULT_STAGE "/mnt/SDCARD/.moonlight-tsp-update"
@@ -49,6 +50,7 @@
 #define T_UPDATE_CHECK 20000
 #define T_UPDATE_STALL 45000    /* download: no progress for this long */
 #define T_UPDATE_VERIFY 90000   /* unpack the download and test it */
+#define T_STATUS 5000           /* battery and Wi-Fi in the header */
 
 /* The UI's exit status that tells launch.sh to install a staged update. */
 #define EXIT_INSTALL_UPDATE 3
@@ -133,6 +135,9 @@ static struct {
     const char *started_file;   /* MLTSP_STARTED_FILE, from update.sh */
     int exit_code;
     int perf_scene;             /* CrossMix CPU Performance scene is on */
+    struct ui_status st;        /* battery and Wi-Fi */
+    int status_fake;            /* set by the debug FIFO: no polling */
+    uint64_t status_at;         /* next status_poll() */
     int fifo_fd;
     char fifo_buf[256];
     size_t fifo_len;
@@ -2051,12 +2056,83 @@ static const char *status_text(const struct hstatus *s, uint32_t *col)
     }
 }
 
+/*
+ * Battery and Wi-Fi at the top right: [Wi-Fi]  [bolt] 62% [battery], with
+ * the right edge at RIGHT and the centre line at CY. Returns the left edge
+ * (RIGHT if nothing is shown).
+ */
+static int draw_status(int right, int cy)
+{
+    const struct ui_status *st = &U.st;
+    const uint32_t off = (C_DIM & 0xffffff00u) | 0x50;
+    int x = right, w, h, i;
+
+    if (st->bat_pct != STATUS_NONE) {
+        int pct = st->bat_pct, fw;
+        uint32_t fill = st->bat_charging ? C_OK : pct <= 10 ? C_ERR :
+                        pct <= 20 ? C_WARN : C_TEXT;
+        char txt[8];
+
+        /* body 38x20 with a 3x8 nub on the right */
+        x -= 41;
+        draw_round_rect(x + 38, cy - 4, 3, 8, 1, C_DIM);
+        draw_round_rect(x, cy - 10, 38, 20, 5, C_DIM);
+        draw_round_rect(x + 2, cy - 8, 34, 16, 3, C_HEAD);
+        fw = (30 * pct + 50) / 100;
+        if (pct > 0 && fw < 3)
+            fw = 3;
+        draw_round_rect(x + 4, cy - 6, fw, 12, 2, fill);
+
+        snprintf(txt, sizeof(txt), "%d%%", pct);
+        x -= 8;
+        x -= draw_text(F_SMALL, x, cy - draw_font_height(F_SMALL) / 2,
+                       st->bat_charging ? C_OK : pct <= 20 ? fill : C_DIM,
+                       txt, AL_RIGHT, 0);
+        if (st->bat_charging) {
+            draw_icon_size(IC_BOLT, &w, &h);
+            x -= 6 + w;
+            draw_icon(IC_BOLT, x, cy - h / 2, C_OK);
+        }
+    }
+    if (st->wifi_level != STATUS_NONE) {
+        draw_icon_size(IC_WIFI_DOT, &w, &h);
+        if (x != right)
+            x -= 22;
+        x -= w;
+        for (i = 0; i < 4; i++)
+            draw_icon((enum ui_icon)(IC_WIFI_DOT + i), x, cy - h / 2,
+                      st->wifi_level >= i && st->wifi_level >= 0 ?
+                      C_TEXT : off);
+    }
+    return x;
+}
+
+/*
+ * The title on the left, battery and Wi-Fi on the right, and RIGHT (in
+ * COLOR) between them, as much of it as fits.
+ */
+static void draw_header_c(const char *title, const char *right,
+                          uint32_t color)
+{
+    int sx, tw, rx, maxw;
+
+    draw_rect(0, 0, UI_W, 88, C_HEAD);
+    sx = draw_status(UI_W - 48, 44);
+    tw = draw_text(F_TITLE, 48, 20, C_TEXT, title, AL_LEFT,
+                   sx - 80 < 760 ? sx - 80 : 760);
+    if (right == NULL)
+        return;
+    rx = sx == UI_W - 48 ? sx : sx - 28;
+    maxw = rx - (48 + tw + 32);
+    if (maxw > 420 && color == C_DIM)
+        maxw = 420;
+    if (maxw >= 60)
+        draw_text(F_SMALL, rx, 32, color, right, AL_RIGHT, maxw);
+}
+
 static void draw_header(const char *title, const char *right)
 {
-    draw_rect(0, 0, UI_W, 88, C_HEAD);
-    draw_text(F_TITLE, 48, 20, C_TEXT, title, AL_LEFT, 760);
-    if (right != NULL)
-        draw_text(F_SMALL, UI_W - 48, 32, C_DIM, right, AL_RIGHT, 420);
+    draw_header_c(title, right, C_DIM);
 }
 
 static void draw_row(int vis, int selected, const char *title,
@@ -2115,12 +2191,11 @@ static void render_hosts(void)
         { "A", "Select" }, { "X", "Settings" }, { "B", "Exit" },
     };
 
-    draw_header("Moonlight HW", U.perf_scene ? NULL :
-                "v" UI_VERSION ", hardware decoding");
     if (U.perf_scene)
-        draw_text(F_SMALL, UI_W - 48, 32, C_WARN,
-                  "The CPU Performance scene holds the CPU at 2 GHz and "
-                  "uses more battery.", AL_RIGHT, 840);
+        draw_header_c("Moonlight HW", "The CPU Performance scene is on. "
+                      "It uses more battery.", C_WARN);
+    else
+        draw_header("Moonlight HW", "v" UI_VERSION ", hardware decoding");
     list_clamp(l, n);
     for (i = l->top; i < n && i < l->top + LIST_ROWS; i++) {
         int sel = i == l->sel;
@@ -2512,6 +2587,76 @@ static void render(void)
 
 /* ---- debug FIFO ------------------------------------------------------- */
 
+static void log_status(void)
+{
+    const struct ui_status *st = &U.st;
+    char bat[32], wifi[48];
+
+    if (st->bat_pct == STATUS_NONE)
+        snprintf(bat, sizeof(bat), "none");
+    else
+        snprintf(bat, sizeof(bat), "%d%%%s", st->bat_pct,
+                 st->bat_charging ? " charging" : "");
+    if (st->wifi_level == STATUS_NONE)
+        snprintf(wifi, sizeof(wifi), "none");
+    else if (st->wifi_level == STATUS_WIFI_DOWN)
+        snprintf(wifi, sizeof(wifi), "not connected");
+    else if (st->wifi_dbm < 0)
+        snprintf(wifi, sizeof(wifi), "%d dBm (%d bars)", st->wifi_dbm,
+                 st->wifi_level);
+    else
+        snprintf(wifi, sizeof(wifi), "%d bars", st->wifi_level);
+    log_msg("status: battery %s, wifi %s", bat, wifi);
+}
+
+/* Reads battery and Wi-Fi again; redraws if the header changes. */
+static void update_status(uint64_t now)
+{
+    int changed;
+
+    U.status_at = now + T_STATUS;
+    if (U.status_fake)
+        return;
+    changed = status_poll(&U.st);
+    if (U.st.note[0] != '\0') {
+        log_msg("status: %s", U.st.note);
+        U.st.note[0] = '\0';
+    }
+    if (changed) {
+        log_status();
+        redraw();
+    }
+}
+
+/*
+ * "status PCT|none charging|discharging DBM|off|none": fixed values for
+ * the UI tests (polling stops).
+ */
+static void fifo_status(const char *args)
+{
+    char pct[16], chg[16], dbm[16];
+    struct ui_status *st = &U.st;
+
+    if (sscanf(args, "%15s %15s %15s", pct, chg, dbm) != 3) {
+        log_msg("fifo: status PCT|none charging|discharging DBM|off|none");
+        return;
+    }
+    U.status_fake = 1;
+    st->bat_pct = strcmp(pct, "none") == 0 ? STATUS_NONE : atoi(pct);
+    st->bat_charging = strcmp(chg, "charging") == 0;
+    st->wifi_dbm = 0;
+    if (strcmp(dbm, "none") == 0) {
+        st->wifi_level = STATUS_NONE;
+    } else if (strcmp(dbm, "off") == 0) {
+        st->wifi_level = STATUS_WIFI_DOWN;
+    } else {
+        st->wifi_dbm = atoi(dbm);
+        st->wifi_level = status_wifi_level(st->wifi_dbm, -1);
+    }
+    log_status();
+    redraw();
+}
+
 static void fifo_command(char *line)
 {
     if (strncmp(line, "shot ", 5) == 0) {
@@ -2519,6 +2664,8 @@ static void fifo_command(char *line)
         redraw();
     } else if (strcmp(line, "quit") == 0) {
         U.quit = 1;
+    } else if (strncmp(line, "status ", 7) == 0) {
+        fifo_status(line + 7);
     } else if (strncmp(line, "mdns ", 5) == 0 && U.scr == S_SEARCH &&
                U.md.n < MDNS_MAX_RESULTS) {
         /* "mdns ADDR NAME": a fake search result for UI tests. */
@@ -2704,6 +2851,13 @@ int main(int argc, char **argv)
         return 1;
     }
     log_msg("%s", draw_info());
+    status_init(&U.st, "/sys/class/power_supply", "/sys/class/net", "wlan0");
+    log_msg("status: battery in %s, Wi-Fi interface %s",
+            U.st.bat_dir[0] ? U.st.bat_dir : "(none)", U.st.ifname);
+    /* Before the first frame, so that it has the values. */
+    status_poll(&U.st);
+    log_status();
+    U.status_at = now_ms() + T_STATUS;
 
     U.lv_hosts.sel = U.cfg.last_host;
     if (U.cfg.nhosts == 0)
@@ -2769,6 +2923,10 @@ int main(int argc, char **argv)
             next = U.pad_retry_at;
         if (U.tick_at != 0 && (next == 0 || U.tick_at < next))
             next = U.tick_at;
+        /* No status wake-ups during a stream. */
+        if (U.scr != S_STREAM && !U.status_fake &&
+            (next == 0 || U.status_at < next))
+            next = U.status_at;
         if (U.search_end != 0) {
             uint64_t s = U.search_next != 0 && U.search_next < U.search_end ?
                          U.search_next : U.search_end;
@@ -2844,6 +3002,10 @@ int main(int argc, char **argv)
         }
         if (U.tick_at != 0 && now >= U.tick_at)
             redraw();
+        /* Leaving a stream finds STATUS_AT past: the Paused screen gets
+         * fresh values at once. */
+        if (U.scr != S_STREAM && now >= U.status_at)
+            update_status(now);
         if (U.scr == S_HOSTS && !U.dlg.active)
             start_next_check();
         show_update_offer();
@@ -2855,6 +3017,7 @@ int main(int argc, char **argv)
     stop_search();
     save_config();
     draw_quit();
+    status_close(&U.st);
     ui_pad_close(&U.pad);
     return U.exit_code;
 }

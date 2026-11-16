@@ -38,7 +38,7 @@
 #include "video_cedar.h"
 #include "wifi_ps.h"
 
-#define ENGINE_VERSION "0.3.0"
+#define ENGINE_VERSION "0.3.1"
 #define DEFAULT_KEYDIR "/mnt/UDISK/trimui-tools/moonlight-tsp/keys"
 #define LEGACY_KEYDIR "/.cache/moonlight"
 #define DEFAULT_UPDATE_URL "https://github.com/isalin/moonlight-tsp/releases"

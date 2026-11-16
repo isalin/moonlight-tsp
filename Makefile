@@ -121,9 +121,9 @@ $(ENGINE): $(ENGINE_OBJS) $(TP_OBJS) $(ASOUND_STUB) | $(BUILD)
 # the device has is used; like ALSA, the program links against unversioned
 # stubs with the device sonames.
 UI_SRCS = src/ui_main.c src/ui_draw.c src/ui_pad.c src/ui_engine.c \
-	src/ui_config.c src/ui_mdns.c
+	src/ui_config.c src/ui_mdns.c src/ui_status.c
 UI_HDRS = src/ui_draw.h src/ui_pad.h src/ui_engine.h src/ui_config.h \
-	src/ui_mdns.h src/input_evdev.h
+	src/ui_mdns.h src/ui_status.h src/input_evdev.h
 UI_OBJS = $(patsubst src/%.c,$(BUILD)/obj/ui/%.o,$(UI_SRCS))
 SDL_CFLAGS = $(shell pkg-config --cflags sdl2 SDL2_ttf)
 
@@ -174,13 +174,17 @@ $(BUILD)/input-test: tests/input-test.c src/input_evdev.c src/input_evdev.h \
 $(BUILD)/update-test: tests/update-test.c src/update_manifest.c src/update.h \
 		| $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/update-test.c src/update_manifest.c
+$(BUILD)/status-test: tests/status-test.c src/ui_status.c src/ui_status.h \
+		| $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/status-test.c src/ui_status.c
 check: $(BUILD)/mdns-test $(BUILD)/dump-test $(BUILD)/fdguard-test \
-		$(BUILD)/input-test $(BUILD)/update-test
+		$(BUILD)/input-test $(BUILD)/update-test $(BUILD)/status-test
 	$(BUILD)/mdns-test
 	$(BUILD)/dump-test
 	$(BUILD)/fdguard-test
 	$(BUILD)/input-test
 	$(BUILD)/update-test
+	$(BUILD)/status-test
 
 clean:
 	rm -rf $(BUILD)

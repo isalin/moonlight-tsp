@@ -23,17 +23,18 @@ host=10.0.0.2 Living room
 host=10.0.0.3 Laptop
 EOF
 }
-# KEEP=1 keeps the config of the previous run.
+# A write never blocks the run if the UI has exited.
+k() { timeout 2 sh -c 'echo "$1" > "$2"' - "$1" "$fifo" || echo "ui gone at: $1"; sleep "${2:-0.3}"; }
+# KEEP=1 keeps the config of the previous run. The container has no
+# battery or Wi-Fi: the header shows STATUS (default 78%, -55 dBm).
 start() {
     case $1 in first*) ;; *) [ -n "${KEEP:-}" ] || hosts ;; esac
     "$ui" --engine /src/tests/fake-engine.sh --debug-fifo "$fifo" \
         2> "$shots/ui-$1.log" &
     pid=$!
     for _ in $(seq 50); do [ -p "$fifo" ] && break; sleep 0.1; done
-    sleep 0.5
+    k "status ${STATUS:-78 discharging -55}" 0.5
 }
-# A write never blocks the run if the UI has exited.
-k() { timeout 2 sh -c 'echo "$1" > "$2"' - "$1" "$fifo" || echo "ui gone at: $1"; sleep "${2:-0.3}"; }
 shot() { k "shot $shots/$1.bmp" 0.4; }
 finish() {
     k quit 0.5
@@ -166,6 +167,21 @@ shot 21-perf-scene-warning
 finish
 kill "$scene"
 
+# Battery and Wi-Fi in the header: low battery and a weak signal, then
+# charging without Wi-Fi, then a device without a battery.
+STATUS="9 discharging -78" start status-low
+sleep 1
+shot 37-status-low
+k "status 54 charging off"
+shot 38-status-charging-no-wifi
+k a 1.2
+k "status none discharging -66"
+shot 39-status-no-battery
+finish
+grep -q "status: battery 54% charging, wifi not connected" \
+    "$shots/ui-status-low.log" && echo "status: logged" ||
+    echo "FAIL: no status line in the log"
+
 # Search results are probed, so already-paired PCs stand out; adding one
 # keeps its status instead of checking again.
 rm -f "$MLTSP_DATA/config.ini" "$FAKE_STATE"/paired-*
@@ -230,12 +246,12 @@ settings_update_now
 k a 1
 k right; k a
 finish
-cfg update_skip=0.3.1
+cfg update_skip=0.9.0
 
 # A skipped version is not offered at start.
 KEEP=1 FAKE_UPDATE=available start update-skipped
 sleep 3.5
-grep -q "0.3.1 was skipped before" "$shots/ui-update-skipped.log" &&
+grep -q "0.9.0 was skipped before" "$shots/ui-update-skipped.log" &&
     echo "skipped version: no dialog" || echo "FAIL: skipped version offered"
 finish
 
@@ -245,8 +261,8 @@ FAKE_UPDATE=available start update-fetch
 sleep 3.5
 k left; k a 1.3
 shot 31-update-downloading
-grep -q "^update-fetch 0.3.1$" "$FAKE_STATE/updates.log" &&
-    echo "fetch: 0.3.1" || echo "FAIL: no update-fetch 0.3.1"
+grep -q "^update-fetch 0.9.0$" "$FAKE_STATE/updates.log" &&
+    echo "fetch: 0.9.0" || echo "FAIL: no update-fetch 0.9.0"
 expect_exit 3
 
 # B stops a download.
@@ -293,9 +309,9 @@ shot 35-update-installed
 [ ! -e "$MLTSP_DATA/update-result" ] && echo "update-result removed" ||
     echo "FAIL: update-result kept"
 finish
-echo "rolled-back 0.3.1 0.3.0" > "$MLTSP_DATA/update-result"
+echo "rolled-back 0.9.0 0.3.0" > "$MLTSP_DATA/update-result"
 start update-rolled-back
 shot 36-update-rolled-back
 finish
-cfg update_skip=0.3.1
+cfg update_skip=0.9.0
 echo "screens: $(ls "$shots"/*.bmp | wc -l)"

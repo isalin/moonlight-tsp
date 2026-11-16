@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 #include "ui_draw.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +35,8 @@ static struct {
     SDL_Renderer *r;
     TTF_Font *font[F_COUNT];
     SDL_Texture *disc;
+    SDL_Texture *icon[IC_COUNT];
+    int icon_w[IC_COUNT], icon_h[IC_COUNT];
     struct tex_entry cache[CACHE_N];
     unsigned long frame;
     char info[256];
@@ -52,32 +55,32 @@ static void tint(SDL_Texture *t, uint32_t c)
     SDL_SetTextureAlphaMod(t, (Uint8)c);
 }
 
-/* Anti-aliased white disc used for circles and rounded corners. */
-static SDL_Texture *make_disc(void)
+/*
+ * Anti-aliased white masks, tinted when drawn. INSIDE says whether a point
+ * (in pixels from the top-left corner) is in the shape; each pixel takes
+ * 4x4 samples.
+ */
+static SDL_Texture *make_mask(int w, int h,
+                              int (*inside)(float x, float y, int arg),
+                              int arg)
 {
-    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, DISC, DISC, 32,
+    SDL_Surface *s = SDL_CreateRGBSurfaceWithFormat(0, w, h, 32,
                                                     SDL_PIXELFORMAT_ARGB8888);
     SDL_Texture *t;
     int x, y, sx, sy;
 
     if (s == NULL)
         return NULL;
-    for (y = 0; y < DISC; y++) {
+    for (y = 0; y < h; y++) {
         Uint32 *row = (Uint32 *)((Uint8 *)s->pixels + y * s->pitch);
 
-        for (x = 0; x < DISC; x++) {
+        for (x = 0; x < w; x++) {
             int in = 0;
 
-            /* 4x4 supersampling */
             for (sy = 0; sy < 4; sy++)
-                for (sx = 0; sx < 4; sx++) {
-                    float fx = (float)x + ((float)sx + 0.5f) / 4.0f -
-                               DISC / 2.0f;
-                    float fy = (float)y + ((float)sy + 0.5f) / 4.0f -
-                               DISC / 2.0f;
-
-                    in += fx * fx + fy * fy <= (DISC / 2.0f) * (DISC / 2.0f);
-                }
+                for (sx = 0; sx < 4; sx++)
+                    in += inside((float)x + ((float)sx + 0.5f) / 4.0f,
+                                 (float)y + ((float)sy + 0.5f) / 4.0f, arg);
             row[x] = ((Uint32)(in * 255 / 16) << 24) | 0xffffffu;
         }
     }
@@ -86,6 +89,78 @@ static SDL_Texture *make_disc(void)
     if (t != NULL)
         SDL_SetTextureBlendMode(t, SDL_BLENDMODE_BLEND);
     return t;
+}
+
+/* The disc for circles and rounded corners. */
+static int in_disc(float x, float y, int arg)
+{
+    float fx = x - DISC / 2.0f, fy = y - DISC / 2.0f;
+
+    return fx * fx + fy * fy <= (DISC / 2.0f) * (DISC / 2.0f);
+}
+
+/*
+ * Wi-Fi: a dot and three arcs around a point at the bottom centre, 45
+ * degrees to each side of straight up. The arcs have round ends.
+ */
+#define WIFI_W 36
+#define WIFI_H 26
+#define WIFI_OX 18.0f
+#define WIFI_OY 25.0f
+static const float wifi_r[4][2] = {
+    { 0.0f, 5.0f }, { 8.0f, 11.5f }, { 14.5f, 18.0f }, { 21.0f, 24.5f },
+};
+
+static int in_wifi(float x, float y, int layer)
+{
+    float dx = x - WIFI_OX, dy = WIFI_OY - y;
+    float r0 = wifi_r[layer][0], r1 = wifi_r[layer][1];
+    float d2 = dx * dx + dy * dy;
+
+    if (dy >= 0.0f && fabsf(dx) <= dy && d2 >= r0 * r0 && d2 <= r1 * r1)
+        return 1;
+    if (layer > 0) {
+        float m = (r0 + r1) / 2.0f * 0.70710678f, c = (r1 - r0) / 2.0f;
+        float ex = fabsf(dx) - m, ey = dy - m;
+
+        return ex * ex + ey * ey <= c * c;
+    }
+    return 0;
+}
+
+/* Lightning bolt (charging). */
+#define BOLT_W 12
+#define BOLT_H 18
+static int in_bolt(float x, float y, int arg)
+{
+    static const float p[][2] = {
+        { 8.0f, 0.0f }, { 1.0f, 10.5f }, { 5.5f, 10.5f }, { 4.0f, 18.0f },
+        { 11.0f, 7.5f }, { 6.5f, 7.5f },
+    };
+    const int n = (int)(sizeof(p) / sizeof(p[0]));
+    int i, j, in = 0;
+
+    /* even-odd rule */
+    for (i = 0, j = n - 1; i < n; j = i++)
+        if ((p[i][1] > y) != (p[j][1] > y) &&
+            x < (p[j][0] - p[i][0]) * (y - p[i][1]) / (p[j][1] - p[i][1]) +
+                p[i][0])
+            in = !in;
+    return in;
+}
+
+static void make_icons(void)
+{
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        D.icon[IC_WIFI_DOT + i] = make_mask(WIFI_W, WIFI_H, in_wifi, i);
+        D.icon_w[IC_WIFI_DOT + i] = WIFI_W;
+        D.icon_h[IC_WIFI_DOT + i] = WIFI_H;
+    }
+    D.icon[IC_BOLT] = make_mask(BOLT_W, BOLT_H, in_bolt, 0);
+    D.icon_w[IC_BOLT] = BOLT_W;
+    D.icon_h[IC_BOLT] = BOLT_H;
 }
 
 static const char *find_font(void)
@@ -155,7 +230,8 @@ int draw_init(void)
             return -1;
         }
     }
-    D.disc = make_disc();
+    D.disc = make_mask(DISC, DISC, in_disc, 0);
+    make_icons();
     snprintf(D.info, sizeof(D.info), "video %s, display %dx%d, renderer %s, "
              "font %s", SDL_GetCurrentVideoDriver(), w, h,
              ri.name ? ri.name : "?", path);
@@ -171,6 +247,9 @@ void draw_quit(void)
             SDL_DestroyTexture(D.cache[i].t);
     if (D.disc != NULL)
         SDL_DestroyTexture(D.disc);
+    for (i = 0; i < IC_COUNT; i++)
+        if (D.icon[i] != NULL)
+            SDL_DestroyTexture(D.icon[i]);
     for (i = 0; i < F_COUNT; i++)
         if (D.font[i] != NULL)
             TTF_CloseFont(D.font[i]);
@@ -239,6 +318,22 @@ void draw_round_rect(int x, int y, int w, int h, int r, uint32_t rgba)
     draw_rect(x + r, y, w - 2 * r, h, rgba);
     draw_rect(x, y + r, r, h - 2 * r, rgba);
     draw_rect(x + w - r, y + r, r, h - 2 * r, rgba);
+}
+
+void draw_icon(enum ui_icon ic, int x, int y, uint32_t rgba)
+{
+    SDL_Rect dst = { x, y, D.icon_w[ic], D.icon_h[ic] };
+
+    if (D.icon[ic] == NULL)
+        return;
+    tint(D.icon[ic], rgba);
+    SDL_RenderCopy(D.r, D.icon[ic], NULL, &dst);
+}
+
+void draw_icon_size(enum ui_icon ic, int *w, int *h)
+{
+    *w = D.icon_w[ic];
+    *h = D.icon_h[ic];
 }
 
 int draw_font_height(enum ui_font f)
