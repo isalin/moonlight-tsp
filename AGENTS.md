@@ -66,6 +66,31 @@ contract when the fix is installed.
   syscalls, kernel stacks, code addresses, poll sets, open descriptors);
   read it before guessing at a cause.
 
+## Releases and updates
+
+- Every installed copy checks
+  `github.com/isalin/moonlight-tsp/releases/latest/download/update.txt`
+  at start and offers the newest release. Thus a published release reaches
+  all users. Publish (`scripts/release.sh VERSION --publish`) only with the
+  user's OK, from a clean, committed `master`, after the package was
+  installed and started on the device. A dry run
+  (`scripts/release.sh VERSION`) publishes nothing.
+- The installed version runs the update, so later versions must keep
+  these working: `moonlight-tsp-stream --version` and
+  `moonlight-tsp-ui --version` print `NAME VERSION`; the zip holds
+  `Apps/MoonlightTSP/` with `launch.sh`, `update.sh`, `config.json` and
+  both programs; the UI exits with status 3 to install a staged update and
+  writes `$MLTSP_STARTED_FILE` after its first frame; `update.sh apply APP
+  STAGE DATA` keeps its arguments; the release has the assets
+  `update.txt` and `trimui-moonlight-tsp-VERSION.zip`, and `update.txt`
+  keeps its `key=value` format.
+- Do not delete or replace a published release asset: copies that are
+  downloading it would fail. Fix a bad release with a newer version.
+- The stage folder is `/mnt/SDCARD/.moonlight-tsp-update`. Test the
+  updater with `scripts/update-test.sh` (container) after any change to
+  `src/update*.c`, `package/launch.sh` or `package/update.sh`;
+  `tests/update-apply.sh` is also safe to run on the device from `/tmp`.
+
 ## Code rules
 
 - The executable exports its own `SemTimedWait` to replace the vendor

@@ -19,6 +19,8 @@ struct ui_config {
     int quit_after;     /* quit the host app when the stream ends */
     int wifi_ps_off;    /* Wi-Fi power save off while streaming */
     int sops;           /* let the host optimise game settings */
+    int update_check;   /* ask GitHub for a new version at start */
+    char update_skip[24];   /* a version the user chose to skip */
     int last_host;
     int nhosts;
     struct host_entry hosts[CFG_MAX_HOSTS];

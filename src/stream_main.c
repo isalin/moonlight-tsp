@@ -34,12 +34,17 @@
 #include "cedar_sync.h"
 #include "fdguard.h"
 #include "input_evdev.h"
+#include "update.h"
 #include "video_cedar.h"
 #include "wifi_ps.h"
 
-#define ENGINE_VERSION "0.2.0"
+#define ENGINE_VERSION "0.3.0"
 #define DEFAULT_KEYDIR "/mnt/UDISK/trimui-tools/moonlight-tsp/keys"
 #define LEGACY_KEYDIR "/.cache/moonlight"
+#define DEFAULT_UPDATE_URL "https://github.com/isalin/moonlight-tsp/releases"
+#define DEFAULT_CA_FILE "/etc/ssl/certs/ca-certificates.crt"
+#define DEFAULT_STAGE "/mnt/SDCARD/" UPDATE_STAGE_NAME
+#define DEFAULT_UNZIP "/usr/bin/unzip"
 
 static struct {
     const char *keydir;
@@ -60,6 +65,7 @@ static struct {
     int ipc_fd;
     int no_input;
     int keep_wifi_ps;
+    const char *update_url, *ca_file, *stage, *unzip;
 } O = {
     .keydir = DEFAULT_KEYDIR,
     .width = 1280,
@@ -69,6 +75,10 @@ static struct {
     .codec = "auto",
     .audio_latency = 20,
     .ipc_fd = -1,
+    .update_url = DEFAULT_UPDATE_URL,
+    .ca_file = DEFAULT_CA_FILE,
+    .stage = DEFAULT_STAGE,
+    .unzip = DEFAULT_UNZIP,
 };
 
 /* Engine phase, read by the signal thread. */
@@ -1009,6 +1019,8 @@ static void usage(FILE *f)
 "  reset-display        remove a leftover video layer and restore Wi-Fi\n"
 "                       power save after a killed engine\n"
 "  input-test           print pad events (Ctrl-C ends)\n"
+"  update-check         ask GitHub for a newer release\n"
+"  update-fetch VER     download release VER into the stage folder\n"
 "\n"
 "options:\n"
 "  --host ADDR          host address (all host commands)\n"
@@ -1029,6 +1041,12 @@ static void usage(FILE *f)
 "  --duration SEC       end the stream after SEC seconds\n"
 "  --stats              print statistics every second\n"
 "  --ipc-fd N           UI control socket\n"
+"  --update-url URL     releases page (" DEFAULT_UPDATE_URL ")\n"
+"  --ca-file FILE       root certificates (" DEFAULT_CA_FILE ")\n"
+"  --stage DIR          update stage folder, named " UPDATE_STAGE_NAME "\n"
+"                       (" DEFAULT_STAGE ")\n"
+"  --unzip PROGRAM      (" DEFAULT_UNZIP ")\n"
+"  --version            print the version\n"
 "  -v                   verbose\n");
 }
 
@@ -1057,11 +1075,16 @@ int main(int argc, char **argv)
         { "reset-display", no_argument, NULL, 'R' },
         { "keep-wifi-ps", no_argument, NULL, 'W' },
         { "help", no_argument, NULL, 'Z' },
+        { "update-url", required_argument, NULL, 'U' },
+        { "ca-file", required_argument, NULL, 'C' },
+        { "stage", required_argument, NULL, 'G' },
+        { "unzip", required_argument, NULL, 'X' },
+        { "version", no_argument, NULL, 'V' },
         { NULL, 0, NULL, 0 },
     };
     SERVER_DATA srv;
     const char *cmd, *arg;
-    int c, rc;
+    int c, rc, is_update;
 
     setvbuf(stdout, NULL, _IOLBF, 0);
     while ((c = getopt_long(argc, argv, "v", lopts, NULL)) != -1) {
@@ -1091,6 +1114,11 @@ int main(int argc, char **argv)
             return video_cedar_reset_display() == 0 ? 0 : 1;
         case 'v': O.verbose++; break;
         case 'Z': usage(stdout); return 0;
+        case 'U': O.update_url = optarg; break;
+        case 'C': O.ca_file = optarg; break;
+        case 'G': O.stage = optarg; break;
+        case 'X': O.unzip = optarg; break;
+        case 'V': printf("moonlight-tsp-stream " ENGINE_VERSION "\n"); return 0;
         default: usage(stderr); return 2;
         }
     }
@@ -1107,19 +1135,26 @@ int main(int argc, char **argv)
     }
     if (strcmp(cmd, "input-test") == 0)
         return input_dump();
+    is_update = strcmp(cmd, "update-check") == 0 ||
+                strcmp(cmd, "update-fetch") == 0;
     if (strcmp(cmd, "info") != 0 && strcmp(cmd, "list") != 0 &&
         strcmp(cmd, "pair") != 0 && strcmp(cmd, "unpair") != 0 &&
-        strcmp(cmd, "stream") != 0 && strcmp(cmd, "quit") != 0) {
+        strcmp(cmd, "stream") != 0 && strcmp(cmd, "quit") != 0 &&
+        !is_update) {
         fprintf(stderr, "unknown command %s\n", cmd);
         usage(stderr);
         return 2;
     }
-    if (O.host == NULL) {
+    if (O.host == NULL && !is_update) {
         fprintf(stderr, "%s needs --host\n", cmd);
         return 2;
     }
     if (strcmp(cmd, "stream") == 0 && arg == NULL) {
         fprintf(stderr, "stream needs an app name or id\n");
+        return 2;
+    }
+    if (strcmp(cmd, "update-fetch") == 0 && arg == NULL) {
+        fprintf(stderr, "update-fetch needs a version\n");
         return 2;
     }
     if (O.ipc_fd >= 0) {
@@ -1146,6 +1181,21 @@ int main(int argc, char **argv)
     fdguard_add(g_evpipe[0], "wake pipe");
     fdguard_add(g_evpipe[1], "wake pipe");
 
+    if (is_update) {
+        struct update_opts uo = {
+            .base_url = O.update_url,
+            .ca_file = O.ca_file,
+            .stage = O.stage,
+            .unzip = O.unzip,
+            .version = ENGINE_VERSION,
+            .send = ipc_send,
+        };
+
+        printf("moonlight-tsp-stream " ENGINE_VERSION " %s%s%s\n", cmd,
+               arg != NULL ? " " : "", arg != NULL ? arg : "");
+        return strcmp(cmd, "update-check") == 0 ? update_check(&uo) :
+               update_fetch(&uo, arg);
+    }
     if (connect_host(&srv) != 0)
         return 1;
     if (strcmp(cmd, "info") == 0) {

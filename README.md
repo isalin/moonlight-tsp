@@ -22,7 +22,7 @@ CrossMix-OS 1.3.0. Expect some problems.
 
 | Stream menu (press MENU) | Settings |
 |---|---|
-| ![The paused stream menu with Resume, Mouse mode, Send Home (Guide) button, Disconnect, and Quit app and disconnect, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization](docs/screenshots/settings.png) |
+| ![The paused stream menu with Resume, Mouse mode, Send Home (Guide) button, Disconnect, and Quit app and disconnect, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization, with a scroll bar for the update settings below them](docs/screenshots/settings.png) |
 
 These images are the real screens of the app, at the 1280x720 size of the
 handheld screen. `scripts/ui-screens.sh` made them with sample PCs and a
@@ -90,6 +90,8 @@ saves.
 - No changes to the CPU governor
 - Wi-Fi power saving off during a stream, and on again after it. A setting
   controls this.
+- Updates from GitHub. When the app starts, it checks for a newer version
+  and asks you before it installs it. A setting turns off this check.
 
 ## Requirements
 
@@ -114,15 +116,17 @@ saves.
 7. Turn on the handheld.
 8. Open "Moonlight HW" from the Apps menu.
 
-To update the app, install a newer zip with the same steps. The new files
-replace the old files. The app keeps its settings, pairing data and logs
-in the internal storage of the handheld, in
+From version 0.3.0, the app updates itself (see [Updates](#updates)). You
+can also install a newer zip with the same steps. The new files replace
+the old files. The app keeps its settings, pairing data and logs in the
+internal storage of the handheld, in
 `/mnt/UDISK/trimui-tools/moonlight-tsp/`. Thus an update does not erase
 them.
 
-To remove the app, delete `Apps/MoonlightTSP/` from the SD card. Then
-delete `/mnt/UDISK/trimui-tools/moonlight-tsp/` from the internal storage,
-for example over SSH. The PC shows the handheld as paired until you remove
+To remove the app, delete `Apps/MoonlightTSP/` from the SD card. If the
+card has a `.moonlight-tsp-update` folder, delete it too. Then delete
+`/mnt/UDISK/trimui-tools/moonlight-tsp/` from the internal storage, for
+example over SSH. The PC shows the handheld as paired until you remove
 the handheld in Sunshine.
 
 ## First use
@@ -179,6 +183,40 @@ To open the settings, press X in the PC list or in the app list.
 | Quit the PC app on disconnect | Off | On |
 | Wi-Fi power saving off while streaming | On (recommended) | Off |
 | Let the PC optimize game settings | Off | On |
+| Check for updates at start | On | Off |
+| Check for updates now | Shows the installed version. Press A to check. | |
+
+## Updates
+
+From version 0.3.0, the app can update itself over Wi-Fi.
+
+- When the app starts, it asks GitHub for the newest release. It asks
+  only when it is not busy, and never during a stream. If there is a
+  newer version, the app shows the version number, a summary of the
+  changes and the download size. Select Update, Later or Skip. Later is
+  selected first, so an accidental A press does not start an update. Skip
+  stops the offers for that version only.
+- To check at any time, open Settings and press A on "Check for updates
+  now". This check also shows a version that you skipped.
+- Update downloads the zip (about 4 MB) to the SD card. The app checks
+  the size and the SHA-256 of the zip, unpacks it, and makes sure that
+  the new programs start on the handheld. Then the app replaces
+  `Apps/MoonlightTSP/` and starts again. Your settings, pairing data and
+  logs stay the same.
+- If the new version does not start, the app puts the old version back.
+  Then it shows a message. It does not offer that version again at start.
+
+Each check gets one small file over HTTPS from github.com, which sends the
+request on to the file server of GitHub. A download uses the same servers.
+The requests send the app version (`moonlight-tsp/0.3.0` as the
+User-Agent) and no other data from the handheld. As with all web
+requests, GitHub sees the public IP address of your network. To stop the
+checks, set "Check for updates at start" to Off.
+
+The releases are not signed. The app trusts a release because it comes
+over HTTPS from this GitHub repository. The root certificates of the
+handheld verify the connection. The SHA-256 check finds only damaged
+downloads.
 
 ## Troubleshooting
 
@@ -203,6 +241,21 @@ scene of the handheld is on. This scene holds the CPU at 2 GHz in all
 apps. Moonlight HW never changes the CPU settings. If you want a longer
 battery life, turn off the scene on the handheld.
 
+### An update fails
+
+The message gives the reason. Make sure that Wi-Fi is on and that the SD
+card has free space, then try again with "Check for updates now".
+`update.log` has the details (see [Logs](#logs)). You can also install
+the new zip by hand (see [Install](#install)).
+
+### The app is missing after an update
+
+This can occur only if the handheld lost power while the app replaced its
+folder. To repair it, put the SD card into your computer. Move the folder
+`.moonlight-tsp-update/previous` in the root of the card to
+`Apps/MoonlightTSP`. The name starts with a dot, so some computers do not
+show the folder. You can also install the zip again.
+
 ### A stream stops with a message
 
 The message gives the reason. If the PC does not answer for about 10
@@ -213,10 +266,11 @@ does not freeze.
 ### Logs
 
 The logs are in `/mnt/UDISK/trimui-tools/moonlight-tsp/logs/`. The folder
-has `ui.log`, `launcher.log`, `engine.log` and `stream.log`. Each log has
-a `.1` copy from the previous session. If the watchdog stopped a stream,
-the folder also has `hang.log`. If you report a bug, attach these logs to
-the report.
+has `ui.log`, `launcher.log`, `engine.log`, `stream.log` and `update.log`
+(update checks and downloads). Each of these logs has a `.1` copy from the
+previous session. `install.log` has a line for each step of each update.
+If the watchdog stopped a stream, the folder also has `hang.log`. If you
+report a bug, attach these logs to the report.
 
 ## Build
 
@@ -246,19 +300,30 @@ Thus a different ImageMagick version can change `icon.png`.
 
 `scripts/ui-screens.sh` makes an image of each UI screen in the container,
 without a device. The four images in the Screenshots section come from
-this script.
+this script. `scripts/update-test.sh` tests the updater in the container,
+with a local HTTPS server in place of GitHub.
+
+To make a release, add a section for the version to `CHANGELOG.md` and
+set `UI_VERSION` and `ENGINE_VERSION` to the version. Then commit.
+`scripts/release.sh VERSION` builds the zip and its `update.txt` and
+writes the release notes, but publishes nothing. `scripts/release.sh
+VERSION --publish` also tags the commit, pushes it and makes the GitHub
+release. All installed copies then offer the release at their next start.
 
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/stream_main.c` | `moonlight-tsp-stream`: the stream engine, also a CLI (`info`, `list`, `pair`, `stream`, `quit`, `reset-display`) |
+| `src/stream_main.c` | `moonlight-tsp-stream`: the stream engine, also a CLI (`info`, `list`, `pair`, `stream`, `quit`, `reset-display`, `update-check`, `update-fetch`) |
 | `src/video_cedar.c`, `cedar*.c`, `g2d_rot.c`, `disp.c`, `ion.c` | video: Cedar decode, G2D rotation, display layer, ION buffers |
 | `src/audio_alsa.c`, `src/input_evdev.c`, `src/wifi_ps.c` | audio, controller and mouse input, Wi-Fi power saving |
+| `src/update.c`, `src/update_manifest.c` | updates: the GitHub check, the download, its checks and the stage folder |
 | `src/ui_*.c` | `moonlight-tsp-ui`: the SDL2 interface |
 | `include/` | vendor ABI headers (CedarC 1.3.0, sunxi disp2, G2D) with layout checks |
-| `package/` | launcher and icon |
-| `tests/` | tests for the build computer (`make check`) and the UI screen script |
+| `package/` | launcher, installer for updates (`update.sh`) and icon |
+| `tests/` | tests for the build computer (`make check`), the UI screen script and the updater tests |
+| `scripts/` | fetch, build, package, screenshot, updater test and release scripts |
+| `CHANGELOG.md` | changes in each version; the first line of each section is the summary that the app shows |
 | `tools/` | device test tools (`tsp-videotest`, `tsp-probe`, `tsp-mdns`) |
 | `docs/development-notes.md` | design, measurements and development log |
 

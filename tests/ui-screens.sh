@@ -23,8 +23,9 @@ host=10.0.0.2 Living room
 host=10.0.0.3 Laptop
 EOF
 }
+# KEEP=1 keeps the config of the previous run.
 start() {
-    case $1 in first*) ;; *) hosts ;; esac
+    case $1 in first*) ;; *) [ -n "${KEEP:-}" ] || hosts ;; esac
     "$ui" --engine /src/tests/fake-engine.sh --debug-fifo "$fifo" \
         2> "$shots/ui-$1.log" &
     pid=$!
@@ -179,4 +180,122 @@ shot 23-search-status
 k a 0.2
 shot 24-hosts-added
 finish
+# ---- updates ----
+# Waits for the UI to exit by itself and checks its exit status.
+expect_exit() {
+    local rc=0
+    timeout 15 sh -c "while kill -0 $pid 2>/dev/null; do sleep 0.2; done" ||
+        { echo "FAIL: ui did not exit"; kill -9 "$pid"; }
+    wait "$pid" || rc=$?
+    [ "$rc" = "$1" ] && echo "ui exit status $rc (expected)" ||
+        echo "FAIL: ui exit status $rc, expected $1"
+    rm -f "$fifo"
+}
+cfg() { grep -q "^$1\$" "$MLTSP_DATA/config.ini" && echo "config: $1" ||
+        echo "FAIL: config has no \"$1\""; }
+# Settings, then the row "Check for updates now" (the last of nine).
+settings_update_now() {
+    k x
+    for _ in 1 2 3 4 5 6 7 8; do k down 0.1; done
+}
+
+# Nothing new: the start-up check runs once, quietly. MLTSP_STARTED_FILE
+# is written after the first frame (update.sh uses it).
+rm -f "$FAKE_STATE/updates.log" /tmp/ui-started
+FAKE_UPDATE_DELAY=2 MLTSP_STARTED_FILE=/tmp/ui-started start update-none
+sleep 5
+[ -e /tmp/ui-started ] && echo "started file written" ||
+    echo "FAIL: no started file"
+[ "$(grep -c '^update-check$' "$FAKE_STATE/updates.log" 2>/dev/null)" = 1 ] &&
+    echo "start-up check: once" || echo "FAIL: start-up check count"
+k x
+for _ in 1 2 3 4 5 6 7; do k down 0.1; done
+shot 26-settings-update-check
+k down
+shot 27-settings-update-now
+k a 0.5
+shot 28-update-checking
+sleep 2.2
+shot 29-update-newest
+k a
+finish
+
+# A new version at start: the dialog, with Later focused.
+FAKE_UPDATE=available start update-offer
+sleep 3.5
+shot 30-update-available
+k a
+# Check for updates now offers it again; Skip stores the version.
+settings_update_now
+k a 1
+k right; k a
+finish
+cfg update_skip=0.3.1
+
+# A skipped version is not offered at start.
+KEEP=1 FAKE_UPDATE=available start update-skipped
+sleep 3.5
+grep -q "0.3.1 was skipped before" "$shots/ui-update-skipped.log" &&
+    echo "skipped version: no dialog" || echo "FAIL: skipped version offered"
+finish
+
+# Update: progress, then exit status 3 for launch.sh to install it.
+rm -f "$FAKE_STATE/updates.log"
+FAKE_UPDATE=available start update-fetch
+sleep 3.5
+k left; k a 1.3
+shot 31-update-downloading
+grep -q "^update-fetch 0.3.1$" "$FAKE_STATE/updates.log" &&
+    echo "fetch: 0.3.1" || echo "FAIL: no update-fetch 0.3.1"
+expect_exit 3
+
+# B stops a download.
+FAKE_UPDATE=available start update-stop
+sleep 3.5
+k left; k a 1
+k b 0.5
+shot 32-update-stopped
+finish
+
+# A damaged download.
+FAKE_UPDATE=available FAKE_FETCH=fail start update-fail
+sleep 3.5
+k left; k a 3.5
+shot 33-update-failed
+finish
+
+# A failed check from Settings.
+FAKE_UPDATE=error start update-error
+sleep 3.5
+settings_update_now
+k a 1
+shot 34-update-check-error
+finish
+
+# Check at start Off: no check at all.
+start update-off
+k x
+for _ in 1 2 3 4 5 6 7; do k down 0.1; done
+k right; k b
+finish
+cfg update_check=0
+rm -f "$FAKE_STATE/updates.log"
+KEEP=1 FAKE_UPDATE=available start update-off2
+sleep 4
+finish
+[ ! -s "$FAKE_STATE/updates.log" ] && echo "check off: no check" ||
+    echo "FAIL: checked with the setting off"
+
+# What update.sh reports after a restart, shown once.
+echo "updated 0.2.0 0.3.0" > "$MLTSP_DATA/update-result"
+start update-installed
+shot 35-update-installed
+[ ! -e "$MLTSP_DATA/update-result" ] && echo "update-result removed" ||
+    echo "FAIL: update-result kept"
+finish
+echo "rolled-back 0.3.1 0.3.0" > "$MLTSP_DATA/update-result"
+start update-rolled-back
+shot 36-update-rolled-back
+finish
+cfg update_skip=0.3.1
 echo "screens: $(ls "$shots"/*.bmp | wc -l)"

@@ -32,8 +32,10 @@
 #include "ui_mdns.h"
 #include "ui_pad.h"
 
-#define UI_VERSION "0.2.0"
+#define UI_VERSION "0.3.0"
 #define DEFAULT_DATA "/mnt/UDISK/trimui-tools/moonlight-tsp"
+/* launch.sh sets MLTSP_STAGE to this folder on the app's SD card. */
+#define DEFAULT_STAGE "/mnt/SDCARD/.moonlight-tsp-update"
 
 /* Timeouts (ms). */
 #define T_INFO 6000
@@ -44,6 +46,12 @@
 #define T_HEARTBEAT 6000
 #define T_STOP 10000
 #define T_TERM_GRACE 4000
+#define T_UPDATE_CHECK 20000
+#define T_UPDATE_STALL 45000    /* download: no progress for this long */
+#define T_UPDATE_VERIFY 90000   /* unpack the download and test it */
+
+/* The UI's exit status that tells launch.sh to install a staged update. */
+#define EXIT_INSTALL_UPDATE 3
 
 /* Colours. */
 #define C_BG 0x0e1116ff
@@ -73,8 +81,12 @@ static int row_h = ROW_H, row_pitch = ROW_PITCH;
 enum screen { S_HOSTS, S_SEARCH, S_ADDIP, S_APPS, S_PAIR, S_SETTINGS,
               S_BUSY, S_CONNECTING, S_STREAM, S_MENU };
 
-/* J_PROBE: "info" for a search result (J.host is its index in U.md). */
-enum job { J_NONE, J_INFO, J_LIST, J_PAIR, J_QUIT, J_STREAM, J_PROBE };
+/* J_PROBE: "info" for a search result (J.host is its index in U.md).
+ * The update jobs have no host (J.host is -1). */
+enum job { J_NONE, J_INFO, J_LIST, J_PAIR, J_QUIT, J_STREAM, J_PROBE,
+           J_UPDATE_CHECK, J_UPDATE_FETCH };
+
+enum upd_result { UR_NONE, UR_AVAILABLE, UR_LATEST, UR_ERROR };
 
 enum hstate { H_UNKNOWN, H_CHECKING, H_ONLINE, H_OFFLINE };
 
@@ -104,7 +116,7 @@ struct listview {
 struct dialog {
     int active;
     char title[64];
-    char text[320];
+    char text[320];         /* '\n' starts a new line */
     int nbtn;
     char btn[3][32];
     int sel;
@@ -116,6 +128,10 @@ static struct {
     char data[PATH_MAX], cfg_path[PATH_MAX], keydir[PATH_MAX];
     char logdir[PATH_MAX], stream_log[PATH_MAX], engine_log[PATH_MAX];
     char engine_path[PATH_MAX];
+    char update_log[PATH_MAX], update_result[PATH_MAX], stage[PATH_MAX];
+    const char *update_url;     /* MLTSP_UPDATE_URL, for tests */
+    const char *started_file;   /* MLTSP_STARTED_FILE, from update.sh */
+    int exit_code;
     int perf_scene;             /* CrossMix CPU Performance scene is on */
     int fifo_fd;
     char fifo_buf[256];
@@ -169,6 +185,14 @@ static struct {
     int l_valid;
     char pin[8];
     unsigned drain_delay_us;    /* test only: MLTSP_TEST_DRAIN_DELAY_US */
+
+    /* updates */
+    int upd_checked;        /* the start-up check ran (or is running) */
+    int upd_manual;         /* the running check is from Settings */
+    int upd_offer;          /* show the update dialog when possible */
+    char upd_ver[24], upd_summary[72];
+    unsigned long upd_size;
+    enum screen upd_from;   /* where a download returns to */
 } U;
 
 /* The engine job in progress. */
@@ -194,6 +218,12 @@ static struct {
     struct app apps[MAX_APPS];
     int napps;
     int mouse;              /* mouse mode toggled on in this stream */
+    /* update jobs */
+    enum upd_result upd;
+    char upd_ver[24], upd_summary[72];
+    unsigned long upd_size, upd_got, upd_total;
+    int upd_verify, upd_staged;
+    char upd_err[320];
 } J;
 
 static uint64_t now_ms(void)
@@ -281,6 +311,14 @@ static void dialog(const char *title, const char *text, void (*done)(int),
     redraw();
 }
 
+static void dialog3(const char *title, const char *text, void (*done)(int),
+                    const char *b0, const char *b1, const char *b2)
+{
+    dialog(title, text, done, b0, b1);
+    snprintf(U.dlg.btn[2], sizeof(U.dlg.btn[2]), "%s", b2);
+    U.dlg.nbtn = 3;
+}
+
 static void message(const char *title, const char *text)
 {
     dialog(title, text, NULL, "OK", NULL);
@@ -340,13 +378,24 @@ static int job_start(enum job kind, int host, const char *cmd,
 {
     static char fps[16], bitrate[16];
     const char *args[32];
-    const char *log = kind == J_STREAM ? U.stream_log : U.engine_log;
-    const char *addr;
+    int upd = kind == J_UPDATE_CHECK || kind == J_UPDATE_FETCH;
+    const char *log = kind == J_STREAM ? U.stream_log :
+                      upd ? U.update_log : U.engine_log;
+    const char *addr = "";
     int n = 0;
 
-    if (U.eng.pid > 0 || host < 0)
+    if (U.eng.pid > 0 || (host < 0 && !upd))
         return -1;
-    if (kind == J_PROBE) {
+    if (upd) {
+        /* No host: these talk to GitHub. */
+        host = -1;
+        args[n++] = "--stage";
+        args[n++] = U.stage;
+        if (U.update_url != NULL) {
+            args[n++] = "--update-url";
+            args[n++] = U.update_url;
+        }
+    } else if (kind == J_PROBE) {
         if (host >= U.md.n)
             return -1;
         addr = U.md.r[host].addr;
@@ -355,10 +404,12 @@ static int job_start(enum job kind, int host, const char *cmd,
             return -1;
         addr = U.cfg.hosts[host].addr;
     }
-    args[n++] = "--host";
-    args[n++] = addr;
-    args[n++] = "--keydir";
-    args[n++] = U.keydir;
+    if (!upd) {
+        args[n++] = "--host";
+        args[n++] = addr;
+        args[n++] = "--keydir";
+        args[n++] = U.keydir;
+    }
     if (kind == J_STREAM) {
         snprintf(fps, sizeof(fps), "%d", U.cfg.fps);
         snprintf(bitrate, sizeof(bitrate), "%d", U.cfg.bitrate);
@@ -389,7 +440,8 @@ static int job_start(enum job kind, int host, const char *cmd,
         args[n++] = arg;
     args[n] = NULL;
 
-    if (engine_spawn(&U.eng, U.engine_path, args, log) != 0) {
+    /* The update log keeps a check and the download that follows it. */
+    if (engine_spawn(&U.eng, U.engine_path, args, log, upd) != 0) {
         log_msg("engine: spawn %s failed: %s", U.engine_path, strerror(errno));
         return -1;
     }
@@ -398,7 +450,7 @@ static int job_start(enum job kind, int host, const char *cmd,
     J.host = host;
     J.start = now_ms();
     J.deadline = J.start + timeout;
-    log_msg("job %s %s%s%s (pid %d)", cmd, addr,
+    log_msg("job %s%s%s%s%s (pid %d)", cmd, addr[0] ? " " : "", addr,
             arg ? " " : "", arg ? arg : "", (int)U.eng.pid);
     return 0;
 }
@@ -412,6 +464,8 @@ static void job_cancel(void)
         U.hs[J.host].st = H_UNKNOWN;
     if (J.kind == J_PROBE && U.ms[J.host].st == H_CHECKING)
         U.ms[J.host].st = H_UNKNOWN;
+    if (J.kind == J_UPDATE_CHECK && !U.upd_manual)
+        U.upd_checked = 0;      /* another job came first: try again later */
     engine_kill(&U.eng);
     J.kind = J_NONE;
 }
@@ -429,6 +483,61 @@ static void enter_stream_screen(void)
     U.scr = S_STREAM;
     ui_pad_stop_repeat(&U.pad);
     redraw();
+}
+
+static void busy(const char *title, const char *text, int cancel);
+
+static void fetch_progress_text(void)
+{
+    snprintf(U.busy_text, sizeof(U.busy_text), "%.1f of %.1f MB",
+             J.upd_got / 1048576.0, J.upd_total / 1048576.0);
+}
+
+/* "update ..." lines from update-check and update-fetch. */
+static void on_update_line(char *arg)
+{
+    char *rest = strchr(arg, ' ');
+
+    if (rest != NULL)
+        *rest++ = '\0';
+    else
+        rest = arg + strlen(arg);
+    if (strcmp(arg, "available") == 0) {
+        int off = 0;
+
+        /* available VERSION SIZE SUMMARY */
+        if (sscanf(rest, "%23s %lu %n", J.upd_ver, &J.upd_size, &off) >= 2) {
+            J.upd = UR_AVAILABLE;
+            snprintf(J.upd_summary, sizeof(J.upd_summary), "%s",
+                     off > 0 ? rest + off : "");
+        }
+    } else if (strcmp(arg, "none") == 0) {
+        J.upd = UR_LATEST;
+        snprintf(J.upd_ver, sizeof(J.upd_ver), "%s", rest);
+    } else if (strcmp(arg, "progress") == 0) {
+        if (sscanf(rest, "%lu %lu", &J.upd_got, &J.upd_total) == 2 &&
+            J.kind == J_UPDATE_FETCH && J.killed == K_NONE) {
+            J.deadline = now_ms() + T_UPDATE_STALL;
+            if (U.scr == S_BUSY && !J.upd_verify) {
+                fetch_progress_text();
+                redraw();
+            }
+        }
+    } else if (strcmp(arg, "verify") == 0) {
+        J.upd_verify = 1;
+        if (J.kind == J_UPDATE_FETCH && J.killed == K_NONE)
+            J.deadline = now_ms() + T_UPDATE_VERIFY;
+        if (U.scr == S_BUSY) {
+            snprintf(U.busy_text, sizeof(U.busy_text), "Testing version %s...",
+                     U.upd_ver);
+            redraw();
+        }
+    } else if (strcmp(arg, "staged") == 0) {
+        J.upd_staged = 1;
+    } else if (strcmp(arg, "error") == 0) {
+        J.upd = UR_ERROR;
+        snprintf(J.upd_err, sizeof(J.upd_err), "%s", rest);
+    }
 }
 
 static void on_engine_line(char *line)
@@ -502,6 +611,8 @@ static void on_engine_line(char *line)
         }
     } else if (strcmp(line, "ended") == 0) {
         J.ended = 1;
+    } else if (strcmp(line, "update") == 0) {
+        on_update_line(arg);
     } else if (strcmp(line, "error") == 0) {
         char kind[32] = "";
         int off = 0;
@@ -688,6 +799,229 @@ static void after_stream_dialog(int choice)
     (void)choice;
 }
 
+/* ---- updates ---------------------------------------------------------- */
+
+static void start_update_fetch(void);
+
+/* Where an update download or a check from Settings returns to. */
+static void update_return(void)
+{
+    if (U.upd_from == S_HOSTS) {
+        go_hosts();
+    } else if (U.upd_from == S_APPS) {
+        go_apps(0);
+    } else {
+        U.scr = U.upd_from;
+        redraw();
+    }
+}
+
+static void update_offer_done(int choice)
+{
+    if (choice == 0) {
+        log_msg("update: the user chose to update to %s", U.upd_ver);
+        start_update_fetch();
+    } else if (choice == 2) {
+        log_msg("update: the user skips %s", U.upd_ver);
+        snprintf(U.cfg.update_skip, sizeof(U.cfg.update_skip), "%s",
+                 U.upd_ver);
+        save_config();
+    } else {
+        log_msg("update: later");
+    }
+}
+
+/* Shows a found update as soon as no other dialog or job is in the way. */
+static void show_update_offer(void)
+{
+    char text[320], size[32];
+
+    if (!U.upd_offer || U.dlg.active ||
+        (U.scr != S_HOSTS && U.scr != S_APPS && U.scr != S_SETTINGS))
+        return;
+    U.upd_offer = 0;
+    snprintf(size, sizeof(size), "%.1f MB", U.upd_size / 1048576.0);
+    snprintf(text, sizeof(text), "Version %s is available. You have "
+             UI_VERSION ".\n%s%s%sThe download is %s. Then the app "
+             "starts again.", U.upd_ver, U.upd_summary[0] ? "New: " : "",
+             U.upd_summary, U.upd_summary[0] ? "\n" : "", size);
+    dialog3("Update available", text, update_offer_done, "Update", "Later",
+            "Skip");
+    U.dlg.sel = 1;              /* a stray A press changes nothing */
+}
+
+/* The start-up check: once per run, when nothing else uses the engine. */
+static void start_update_check(void)
+{
+    if (U.upd_checked || !U.cfg.update_check || J.kind != J_NONE ||
+        U.dlg.active || (U.scr != S_HOSTS && U.scr != S_APPS))
+        return;
+    U.upd_checked = 1;
+    U.upd_manual = 0;
+    if (job_start(J_UPDATE_CHECK, -1, "update-check", NULL,
+                  T_UPDATE_CHECK) != 0)
+        log_msg("update: the check did not start");
+}
+
+static void start_manual_update_check(void)
+{
+    if (J.kind == J_STREAM || J.kind == J_UPDATE_FETCH)
+        return;
+    U.upd_manual = 1;           /* before job_cancel: keeps upd_checked */
+    job_cancel();
+    U.upd_checked = 1;
+    U.upd_from = U.scr;
+    if (job_start(J_UPDATE_CHECK, -1, "update-check", NULL,
+                  T_UPDATE_CHECK) != 0) {
+        U.upd_manual = 0;
+        message("Cannot check for updates", "The stream engine did not "
+                "start.");
+        return;
+    }
+    busy("Checking for updates", "Asking GitHub for the newest version...",
+         1);
+}
+
+static void update_check_done(void)
+{
+    int manual = U.upd_manual;
+    char buf[400];
+
+    U.upd_manual = 0;
+    switch (J.upd) {
+    case UR_AVAILABLE:
+        log_msg("update: version %s is available (%lu bytes)", J.upd_ver,
+                J.upd_size);
+        break;
+    case UR_LATEST:
+        log_msg("update: none (newest release %s)", J.upd_ver);
+        break;
+    default:
+        log_msg("update: check failed: %s", J.killed == K_TIMEOUT ?
+                "timeout" : J.upd_err[0] ? J.upd_err : "no result");
+        break;
+    }
+    if (manual)
+        update_return();
+    if (J.upd == UR_AVAILABLE) {
+        if (!manual && strcmp(J.upd_ver, U.cfg.update_skip) == 0) {
+            log_msg("update: %s was skipped before", J.upd_ver);
+            return;
+        }
+        snprintf(U.upd_ver, sizeof(U.upd_ver), "%s", J.upd_ver);
+        snprintf(U.upd_summary, sizeof(U.upd_summary), "%s", J.upd_summary);
+        U.upd_size = J.upd_size;
+        U.upd_offer = 1;
+        show_update_offer();
+    } else if (manual && J.upd == UR_LATEST) {
+        message("No update", "You have the newest version (" UI_VERSION
+                ").");
+    } else if (manual) {
+        if (J.killed == K_TIMEOUT)
+            snprintf(buf, sizeof(buf), "GitHub did not answer in %d "
+                     "seconds. Make sure that Wi-Fi is on.",
+                     T_UPDATE_CHECK / 1000);
+        else if (J.upd_err[0])
+            snprintf(buf, sizeof(buf), "%s", J.upd_err);
+        else
+            snprintf(buf, sizeof(buf), "The check did not complete. The "
+                     "logs are in %s.", U.logdir);
+        message("Cannot check for updates", buf);
+    }
+}
+
+static void start_update_fetch(void)
+{
+    if (J.kind == J_STREAM)
+        return;
+    job_cancel();
+    U.upd_from = U.scr;
+    if (job_start(J_UPDATE_FETCH, -1, "update-fetch", U.upd_ver,
+                  T_UPDATE_STALL) != 0) {
+        message("Cannot update", "The stream engine did not start.");
+        return;
+    }
+    J.upd_total = U.upd_size;
+    busy("Downloading update", "", 1);
+    fetch_progress_text();
+}
+
+/* Removes what a stopped download left. The engine cleans the rest. */
+static void update_remove_partial(void)
+{
+    char path[PATH_MAX + 32];
+
+    snprintf(path, sizeof(path), "%s/download.zip.part", U.stage);
+    unlink(path);
+    snprintf(path, sizeof(path), "%s/download.zip", U.stage);
+    unlink(path);
+    rmdir(U.stage);
+}
+
+static void render(void);
+
+static void update_fetch_done(int ok)
+{
+    char buf[400];
+
+    if (ok && J.upd_staged) {
+        log_msg("update: version %s is ready; exiting with status %d to "
+                "install it", U.upd_ver, EXIT_INSTALL_UPDATE);
+        snprintf(buf, sizeof(buf), "Moonlight HW %s starts in a moment.",
+                 U.upd_ver);
+        busy("Installing update", buf, 0);
+        render();
+        U.exit_code = EXIT_INSTALL_UPDATE;
+        U.quit = 1;
+        return;
+    }
+    log_msg("update: download failed: %s", J.killed == K_TIMEOUT ?
+            "timeout" : J.upd_err[0] ? J.upd_err : "no result");
+    if (J.killed == K_TIMEOUT)
+        update_remove_partial();
+    update_return();
+    if (J.killed == K_TIMEOUT)
+        snprintf(buf, sizeof(buf), "The download stopped. Make sure that "
+                 "Wi-Fi is on, then try again.");
+    else if (J.upd_err[0])
+        snprintf(buf, sizeof(buf), "%s", J.upd_err);
+    else
+        snprintf(buf, sizeof(buf), "The download did not complete. The logs "
+                 "are in %s.", U.logdir);
+    message("Cannot update", buf);
+}
+
+/* What update.sh reported about the last install, shown once. */
+static void read_update_result(void)
+{
+    char line[128], a[24] = "", b[24] = "", kind[16] = "", text[200];
+    FILE *f = fopen(U.update_result, "re");
+
+    if (f == NULL)
+        return;
+    if (fgets(line, sizeof(line), f) == NULL)
+        line[0] = '\0';
+    fclose(f);
+    unlink(U.update_result);
+    if (sscanf(line, "%15s %23s %23s", kind, a, b) != 3)
+        return;
+    log_msg("update: result %s %s %s", kind, a, b);
+    if (strcmp(kind, "updated") == 0) {
+        /* updated FROM TO */
+        snprintf(text, sizeof(text), "Moonlight HW is updated from version "
+                 "%s to version %s.", a, b);
+        message("Update installed", text);
+    } else if (strcmp(kind, "rolled-back") == 0) {
+        /* rolled-back FAILED RESTORED */
+        snprintf(U.cfg.update_skip, sizeof(U.cfg.update_skip), "%s", a);
+        save_config();
+        snprintf(text, sizeof(text), "Version %s did not start on this "
+                 "device. Version %s is back. The app does not offer "
+                 "version %s again.", a, b, a);
+        message("Update failed", text);
+    }
+}
+
 /* The engine has exited and was reaped. */
 static void job_finished(void)
 {
@@ -841,11 +1175,18 @@ static void job_finished(void)
         go_apps(1);
         break;
     }
+    case J_UPDATE_CHECK:
+        update_check_done();
+        break;
+    case J_UPDATE_FETCH:
+        update_fetch_done(ok);
+        break;
     default:
         break;
     }
     start_next_check();
     start_next_probe();
+    start_update_check();
 }
 
 /* Records what a hung engine was waiting for before it is killed. */
@@ -1249,7 +1590,9 @@ static void menu_key(enum ui_key k)
 
 static const int bitrates[] = { 5000, 8000, 10000, 15000, 20000, 30000 };
 #define NBITRATES 6
-#define SETTINGS_N 7
+
+enum { ST_FPS, ST_BITRATE, ST_CODEC, ST_SWAP, ST_QUIT_AFTER, ST_WIFI_PS,
+       ST_SOPS, ST_UPDATE_CHECK, ST_UPDATE_NOW, SETTINGS_N };
 
 static void setting_text(int i, const char **label, char *value, size_t max,
                          const char **help)
@@ -1257,48 +1600,60 @@ static void setting_text(int i, const char **label, char *value, size_t max,
     const struct ui_config *c = &U.cfg;
 
     switch (i) {
-    case 0:
+    case ST_FPS:
         *label = "Frame rate";
         snprintf(value, max, "%d fps", c->fps);
         *help = "30 fps uses less battery and network data. 60 fps gives "
                 "smoother motion.";
         break;
-    case 1:
+    case ST_BITRATE:
         *label = "Bitrate";
         snprintf(value, max, "%d Mbps", c->bitrate / 1000);
         *help = "A higher bitrate gives a sharper picture but needs a strong "
                 "Wi-Fi signal. 10 Mbps is good for 720p.";
         break;
-    case 2:
+    case ST_CODEC:
         *label = "Video codec";
         snprintf(value, max, "%s", c->codec == CODEC_HEVC ? "HEVC" :
                  c->codec == CODEC_H264 ? "H.264" : "Automatic");
         *help = "Automatic lets the PC choose (HEVC when it can). The "
                 "hardware decodes both codecs.";
         break;
-    case 3:
+    case ST_SWAP:
         *label = "Swap A/B and X/Y";
         snprintf(value, max, "%s", c->swap_abxy ? "On" : "Off");
         *help = "Off: the bottom button sends A, as on an Xbox pad. On: each "
                 "button sends its printed letter.";
         break;
-    case 4:
+    case ST_QUIT_AFTER:
         *label = "Quit the PC app on disconnect";
         snprintf(value, max, "%s", c->quit_after ? "On" : "Off");
         *help = "Off keeps the app open on the PC, so you can resume it "
                 "later.";
         break;
-    case 5:
+    case ST_WIFI_PS:
         *label = "Wi-Fi power saving off while streaming";
         snprintf(value, max, "%s", c->wifi_ps_off ? "On" : "Off");
         *help = "On (recommended) prevents Wi-Fi stalls but uses a little "
                 "more battery during the stream.";
         break;
-    default:
+    case ST_SOPS:
         *label = "Let the PC optimize game settings";
         snprintf(value, max, "%s", c->sops ? "On" : "Off");
         *help = "If On, Sunshine or GeForce Experience can change the game "
                 "settings for this resolution.";
+        break;
+    case ST_UPDATE_CHECK:
+        *label = "Check for updates at start";
+        snprintf(value, max, "%s", c->update_check ? "On" : "Off");
+        *help = "If On, the app asks GitHub for a new version each time it "
+                "starts.";
+        break;
+    default:
+        *label = "Check for updates now";
+        snprintf(value, max, "v%s", UI_VERSION);
+        *help = "Press A to ask GitHub for a new version. You have version "
+                UI_VERSION ".";
         break;
     }
 }
@@ -1309,10 +1664,10 @@ static void setting_change(int i, int d)
     int j;
 
     switch (i) {
-    case 0:
+    case ST_FPS:
         c->fps = c->fps == 60 ? 30 : 60;
         break;
-    case 1:
+    case ST_BITRATE:
         for (j = 0; j < NBITRATES && bitrates[j] < c->bitrate; j++)
             ;
         j += d;
@@ -1322,13 +1677,15 @@ static void setting_change(int i, int d)
             j = 0;
         c->bitrate = bitrates[j];
         break;
-    case 2:
+    case ST_CODEC:
         c->codec = (c->codec + (d > 0 ? 1 : 2)) % 3;
         break;
-    case 3: c->swap_abxy = !c->swap_abxy; break;
-    case 4: c->quit_after = !c->quit_after; break;
-    case 5: c->wifi_ps_off = !c->wifi_ps_off; break;
-    default: c->sops = !c->sops; break;
+    case ST_SWAP: c->swap_abxy = !c->swap_abxy; break;
+    case ST_QUIT_AFTER: c->quit_after = !c->quit_after; break;
+    case ST_WIFI_PS: c->wifi_ps_off = !c->wifi_ps_off; break;
+    case ST_SOPS: c->sops = !c->sops; break;
+    case ST_UPDATE_CHECK: c->update_check = !c->update_check; break;
+    default: break;     /* an action, not a value */
     }
     redraw();
 }
@@ -1570,9 +1927,14 @@ static void settings_key(enum ui_key k)
     case UK_UP: list_move(&U.lv_settings, SETTINGS_N, -1); break;
     case UK_DOWN: list_move(&U.lv_settings, SETTINGS_N, 1); break;
     case UK_LEFT: setting_change(U.lv_settings.sel, -1); break;
-    case UK_RIGHT:
+    case UK_RIGHT: setting_change(U.lv_settings.sel, 1); break;
     case UK_A:
-        setting_change(U.lv_settings.sel, 1);
+        if (U.lv_settings.sel == ST_UPDATE_NOW) {
+            save_config();
+            start_manual_update_check();
+        } else {
+            setting_change(U.lv_settings.sel, 1);
+        }
         break;
     case UK_B:
     case UK_MENU:
@@ -1600,6 +1962,17 @@ static void cancel_job_from_ui(void)
     if (J.kind == J_PAIR || J.kind == J_LIST) {
         job_cancel();
         go_hosts();
+    } else if (J.kind == J_UPDATE_CHECK) {
+        job_cancel();
+        U.upd_manual = 0;
+        update_return();
+    } else if (J.kind == J_UPDATE_FETCH) {
+        log_msg("update: download stopped by the user");
+        job_cancel();
+        update_remove_partial();
+        update_return();
+        message("Update stopped", "You can update later. Use \"Check for "
+                "updates now\" in Settings.");
     }
 }
 
@@ -1718,8 +2091,8 @@ static void draw_scrollbar(const struct listview *l, int n)
 
     if (n <= LIST_ROWS)
         return;
-    h = LIST_ROWS * ROW_PITCH * LIST_ROWS / n;
-    y = LIST_Y + (LIST_ROWS * ROW_PITCH - h) * l->top / (n - LIST_ROWS);
+    h = LIST_ROWS * row_pitch * LIST_ROWS / n;
+    y = LIST_Y + (LIST_ROWS * row_pitch - h) * l->top / (n - LIST_ROWS);
     draw_round_rect(LIST_X + LIST_W + 12, y, 8, h, 4, C_DIM);
 }
 
@@ -2013,6 +2386,9 @@ static void render_settings(void)
     static const struct hint h[] = {
         { "<>", "Change" }, { "B", "Save and back" },
     };
+    static const struct hint ha[] = {
+        { "A", "Check" }, { "B", "Save and back" },
+    };
     const char *help = "";
     int i;
 
@@ -2029,58 +2405,71 @@ static void render_settings(void)
             help = hp;
         draw_row(i - l->top, i == l->sel, label, value, C_ACCENT, NULL, 0);
     }
+    draw_scrollbar(l, SETTINGS_N);
     draw_text(F_SMALL, LIST_X + 4, LIST_Y + LIST_ROWS * row_pitch + 12, C_DIM,
               help, AL_LEFT, LIST_W);
     row_h = ROW_H;
     row_pitch = ROW_PITCH;
-    draw_hints(h, 2);
+    draw_hints(l->sel == ST_UPDATE_NOW ? ha : h, 2);
+}
+
+#define DIALOG_LINES 5
+
+/*
+ * Wraps T into at most MAX lines of at most WIDTH pixels, on word
+ * boundaries; '\n' starts a new line. Returns the number of lines.
+ */
+static int wrap_text(int font, const char *t, int width, char out[][320],
+                     int max)
+{
+    int line = 0;
+
+    while (*t != '\0' && line < max) {
+        size_t n = 0, best = 0;
+
+        while (t[n] != '\0' && t[n] != '\n') {
+            size_t m = n;
+
+            while (t[m] == ' ')
+                m++;
+            while (t[m] != '\0' && t[m] != ' ' && t[m] != '\n')
+                m++;
+            if (m >= 320)
+                break;
+            memcpy(out[line], t, m);
+            out[line][m] = '\0';
+            if (draw_text_width(font, out[line]) > width && best > 0)
+                break;
+            best = m;
+            n = m;
+        }
+        memcpy(out[line], t, best);
+        out[line][best] = '\0';
+        line++;
+        t += best;
+        while (*t == ' ')
+            t++;
+        if (*t == '\n')
+            t++;
+    }
+    return line;
 }
 
 static void render_dialog(void)
 {
     struct dialog *d = &U.dlg;
-    int w = 860, h = 330, x = (UI_W - w) / 2, y = (UI_H - h) / 2, i;
-    int bw = 260, bx;
+    char lines[DIALOG_LINES][320];
+    int w = 860, nl = wrap_text(F_BODY, d->text, w - 80, lines, DIALOG_LINES);
+    int h = 330 + (nl > 3 ? (nl - 3) * 40 : 0);
+    int x = (UI_W - w) / 2, y = (UI_H - h) / 2, i;
+    int bw = d->nbtn > 2 ? 240 : 260, bx;
 
     draw_rect(0, 0, UI_W, UI_H, 0x000000a0);
     draw_round_rect(x, y, w, h, 18, C_HEAD);
     draw_text(F_TITLE, x + 40, y + 28, C_TEXT, d->title, AL_LEFT, w - 80);
-
-    /* Wrap the text into at most three lines on word boundaries. */
-    {
-        int line = 0, ly = y + 96;
-        const char *t = d->text;
-
-        while (*t != '\0' && line < 3) {
-            char out[320];
-            size_t n = 0, best = 0;
-
-            while (t[n] != '\0') {
-                size_t m = n;
-
-                while (t[m] == ' ')
-                    m++;
-                while (t[m] != '\0' && t[m] != ' ')
-                    m++;
-                memcpy(out, t, m);
-                out[m] = '\0';
-                if (draw_text_width(F_BODY, out) > w - 80 && best > 0)
-                    break;
-                best = m;
-                n = m;
-            }
-            if (best == 0)
-                best = strlen(t);
-            memcpy(out, t, best);
-            out[best] = '\0';
-            draw_text(F_BODY, x + 40, ly, C_TEXT, out, AL_LEFT, w - 80);
-            ly += 40;
-            line++;
-            t += best;
-            while (*t == ' ')
-                t++;
-        }
-    }
+    for (i = 0; i < nl; i++)
+        draw_text(F_BODY, x + 40, y + 96 + i * 40, C_TEXT, lines[i], AL_LEFT,
+                  w - 80);
     bx = x + w - 40 - d->nbtn * bw - (d->nbtn - 1) * 20;
     for (i = 0; i < d->nbtn; i++) {
         int b = bx + i * (bw + 20);
@@ -2218,6 +2607,15 @@ static void setup_paths(const char *argv0, const char *engine)
     snprintf(U.logdir, sizeof(U.logdir), "%s/logs", U.data);
     snprintf(U.stream_log, sizeof(U.stream_log), "%s/stream.log", U.logdir);
     snprintf(U.engine_log, sizeof(U.engine_log), "%s/engine.log", U.logdir);
+    snprintf(U.update_log, sizeof(U.update_log), "%s/update.log", U.logdir);
+    snprintf(U.update_result, sizeof(U.update_result), "%s/update-result",
+             U.data);
+    d = getenv("MLTSP_STAGE");
+    snprintf(U.stage, sizeof(U.stage), "%s", d && d[0] ? d : DEFAULT_STAGE);
+    d = getenv("MLTSP_UPDATE_URL");
+    U.update_url = d && d[0] ? d : NULL;
+    d = getenv("MLTSP_STARTED_FILE");
+    U.started_file = d && d[0] ? d : NULL;
     mkdir_p(U.logdir);
     if (engine != NULL) {
         snprintf(U.engine_path, sizeof(U.engine_path), "%s", engine);
@@ -2241,7 +2639,9 @@ static void usage(FILE *f)
 {
     fprintf(f, "moonlight-tsp-ui " UI_VERSION "\n"
                "usage: moonlight-tsp-ui [--engine PATH] [--debug-fifo PATH]\n"
-               "data: $MLTSP_DATA or " DEFAULT_DATA "\n");
+               "       moonlight-tsp-ui --version\n"
+               "data: $MLTSP_DATA or " DEFAULT_DATA "\n"
+               "exit status " "3: install the update in $MLTSP_STAGE\n");
 }
 
 int main(int argc, char **argv)
@@ -2258,6 +2658,10 @@ int main(int argc, char **argv)
         } else if (strcmp(argv[i], "--help") == 0) {
             usage(stdout);
             return 0;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            /* update-fetch runs this to prove that a download starts. */
+            printf("moonlight-tsp-ui " UI_VERSION "\n");
+            return 0;
         } else {
             usage(stderr);
             return 2;
@@ -2273,6 +2677,9 @@ int main(int argc, char **argv)
     config_load(&U.cfg, U.cfg_path);
     log_msg("moonlight-tsp-ui " UI_VERSION ": data %s, engine %s, %d hosts",
             U.data, U.engine_path, U.cfg.nhosts);
+    log_msg("update: check at start %s, stage %s%s%s",
+            U.cfg.update_check ? "on" : "off", U.stage,
+            U.cfg.update_skip[0] ? ", skipping " : "", U.cfg.update_skip);
 
     /* Signals before SDL so its handlers stay out of the way. */
     signal(SIGPIPE, SIG_IGN);
@@ -2303,6 +2710,7 @@ int main(int argc, char **argv)
         start_search();
     else
         go_hosts();
+    read_update_result();
 
     while (!U.quit) {
         struct pollfd p[8];
@@ -2314,6 +2722,16 @@ int main(int argc, char **argv)
         if (U.dirty) {
             U.dirty = 0;
             render();
+            if (U.started_file != NULL) {
+                /* update.sh: this version starts and draws. */
+                int fd = open(U.started_file, O_WRONLY | O_CREAT |
+                              O_CLOEXEC, 0644);
+
+                if (fd >= 0)
+                    close(fd);
+                log_msg("update: wrote %s", U.started_file);
+                U.started_file = NULL;
+            }
         }
 
         i_sig = np;
@@ -2428,6 +2846,8 @@ int main(int argc, char **argv)
             redraw();
         if (U.scr == S_HOSTS && !U.dlg.active)
             start_next_check();
+        show_update_offer();
+        start_update_check();
     }
 
     log_msg("exiting");
@@ -2436,5 +2856,5 @@ int main(int argc, char **argv)
     save_config();
     draw_quit();
     ui_pad_close(&U.pad);
-    return 0;
+    return U.exit_code;
 }

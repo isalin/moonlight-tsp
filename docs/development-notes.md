@@ -526,7 +526,9 @@ DE import cache were back at the baseline after every run unless noted.
   once. It starts off in every stream. If another app is running on the PC, the UI asks before quitting it.
 - Settings: 30/60 fps, 5/8/10/15/20/30 Mbit/s, codec Automatic/HEVC/H.264,
   swap A/B and X/Y, quit the PC app on disconnect, Wi-Fi power saving off
-  while streaming (on by default), let the PC optimize game settings (off).
+  while streaming (on by default), let the PC optimize game settings (off),
+  check for updates at start (on) and "Check for updates now" (an action
+  row). The list scrolls (`LIST_ROWS` 7) and has a scroll bar.
   Resolution is fixed at the native 1280x720.
 - On-screen text follows ASD-STE100 Simplified Technical English (since
   2026-11-15): short sentences, simple tenses, active voice, no semicolons,
@@ -552,8 +554,11 @@ DE import cache were back at the baseline after every run unless noted.
 - Data in `/mnt/UDISK/trimui-tools/moonlight-tsp/` (or `$MLTSP_DATA`):
   `config.ini`, `keys/` (the engine copies the stock client's identity from
   `/.cache/moonlight` on first use, so the PC needs no new PIN), and `logs/`
-  (`ui.log`, `launcher.log`, `engine.log`, `stream.log`, each with a `.1`
-  copy of the previous run, and `hang.log` from the last watchdog kill).
+  (`ui.log`, `launcher.log`, `engine.log`, `stream.log`, `update.log`,
+  each with a `.1` copy of the previous run, `hang.log` from the last
+  watchdog kill and `install.log`, which grows by a few lines per update).
+  `update-result` holds the outcome of the last install until the UI
+  shows it.
 
 ### Launcher (`package/launch.sh`)
 
@@ -578,7 +583,8 @@ DE import cache were back at the baseline after every run unless noted.
 - `scripts/package.sh` builds `dist/trimui-moonlight-tsp-<version>.zip`
   for extraction at the SD-card root (`Apps/MoonlightTSP/`): `config.json`
   (label "Moonlight HW"), a 300x300 `icon.png` rendered from
-  `package/icon.svg`, `launch.sh`, both stripped binaries, `README.txt`,
+  `package/icon.svg`, `launch.sh`, `update.sh` (installs updates, since
+  0.3.0), both stripped binaries, `README.txt`,
   `LICENSE` (GPL-3.0), `licenses/` (moonlight-common-c, libgamestream, enet,
   nanors, OpenSSL, curl, expat, libuuid, opus) and `source/` (our tree plus
   the pinned third-party git sources; OpenSSL and curl by URL and SHA-256 in
@@ -629,8 +635,13 @@ DE import cache were back at the baseline after every run unless noted.
   command it receives to `ipc.log`; the script checks that choosing
   "Mouse mode" sends `mouse on` followed by `resume`, and the fake engine
   reports another MENU press 2 s later (shot 12b shows "Mouse mode: On").
-  It saves 27 screenshots to
-  `build/shots/` (PNG).
+  It saves 38 screenshots to
+  `build/shots/` (PNG). Shots 26-36 cover updates: the two settings rows,
+  the manual check (busy, newest, error), the offer, the download, a
+  stopped and a failed download, and the "installed" and "rolled back"
+  messages. The script also checks that the start-up check runs once, that
+  the UI exits with status 3 after `update staged`, that Skip writes
+  `update_skip` and that "Off" runs no check.
   `MLTSP_FONT_FILE=/tmp/tsp-libs/regular.ttf` uses a copy of the device font
   (not redistributed); without it DejaVu Sans is used.
 - The README screenshots in `docs/screenshots/` are shots 05 (`pcs.png`),
@@ -659,6 +670,84 @@ DE import cache were back at the baseline after every run unless noted.
 - `tests/dump-test.c` (`make check`) runs the thread dump on a child blocked
   on a mutex and checks that it lists both threads, their syscalls and code
   addresses.
+
+### Updates (0.3.0)
+
+The user asked for update checks against GitHub at app start, on by
+default, with a manual check in Settings, and decided against release
+signing (2026-11-16).
+
+- Release format: each GitHub release `vX.Y.Z` has the zip and a fixed
+  name `update.txt` (`version`, `zip`, `size`, `sha256`, `summary` of at
+  most 60 bytes, cut at a whole UTF-8 letter). `scripts/release.sh` makes
+  both from the package and the first line of the version's
+  `CHANGELOG.md` section. `src/update_manifest.c` parses it; it rejects a
+  zip name other than `trimui-moonlight-tsp-VERSION.zip`, a size of 64 MB
+  or more, a bad hash and anything over 8 KB.
+- `.../releases/latest/download/update.txt` redirects twice (release, then
+  `release-assets.githubusercontent.com`) to the newest non-draft,
+  non-prerelease release, so no API or JSON is needed. Before the first
+  release it answers 404, which the engine reports as `update none -`.
+- The device has root certificates in `/etc/ssl/certs/ca-certificates.crt`
+  (an old Mozilla list) that verify both GitHub hosts. The static curl has
+  no built-in CA path, so the engine sets `CURLOPT_CAINFO`. curl is limited
+  to HTTPS (also for redirects, at most 5), with a 15 s connect timeout,
+  15 s for the manifest and an abort below 1 KB/s for 30 s.
+- Engine commands (no `--host`, no `connect_host()`): `update-check` and
+  `update-fetch VER`; options `--update-url`, `--ca-file`, `--stage` and
+  `--unzip` exist for the tests. IPC lines: `update available VER SIZE
+  SUMMARY`, `update none VER|-`, `update error TEXT`, `update progress GOT
+  TOTAL` (at most 4 a second), `update verify` and `update staged VER`.
+- `update-fetch` fetches the manifest again from the fixed tag
+  (`download/vVER/update.txt`) and requires its version to be VER. It
+  needs 3 times the zip size plus 8 MB free. It empties the stage
+  `/mnt/SDCARD/.moonlight-tsp-update` (the engine refuses any other folder
+  name), downloads to `download.zip.part`, checks the size and SHA-256,
+  runs `/usr/bin/unzip -q -o` into `new.tmp` (60 s limit), checks for
+  `launch.sh`, `update.sh`, `config.json` and both programs, and requires
+  both staged programs to print `NAME VER` for `--version`. Then it renames
+  `new.tmp` to `new`, writes `ready` ("NEW OLD") with fsync and deletes the
+  zip. Any failure removes the stage.
+- UI: the start-up check runs once per app run, only while idle on the
+  PC list or an app list, never during pairing or a stream. Errors at
+  start are only logged; a skipped version is not offered at start. The
+  manual check shows every result. The offer has Update, Later
+  (focused) and Skip. Limits: 20 s for the check, 45 s without a progress
+  line during the download, 90 s for the verify step. After `update
+  staged` the UI saves its config and exits with status 3.
+- `launch.sh` exports `MLTSP_STAGE` and `MLTSP_DATA`. On status 3 with
+  `$MLTSP_STAGE/ready` and `update.sh` present it runs its cleanup, copies
+  the installed `update.sh` to `/tmp` and `exec`s it as `update.sh apply APP
+  STAGE DATA`. `update.sh` moves the app folder to `previous/`, moves
+  `new/Apps/MoonlightTSP` in, syncs, writes `update-result` and runs the
+  new launcher with `MLTSP_STARTED_FILE=STAGE/started`; the new UI writes
+  that file after its first frame. If the new version exits without it,
+  `update.sh` moves the new folder to `failed/`, restores `previous/`,
+  writes `rolled-back NEW OLD` and starts the old launcher, whose UI shows
+  the message and skips that version. A normal start of the launcher
+  removes a leftover stage, except `previous/` without `started` (a power
+  cut after the swap), which stays as a recovery copy until the next
+  update. A power cut between the two renames leaves no app folder; the
+  README tells users to rename `previous` back by hand.
+- Tests: `make check` runs `tests/update-test.c` (versions and manifests).
+  `scripts/update-test.sh` runs `tests/update-e2e.sh` in the container: a
+  throwaway CA, `tests/update-server.py` with GitHub's two redirects and
+  a cut-off mode, and a python stand-in for BusyBox unzip (38 checks: no
+  release, older, same and newer releases, unknown CA, missing CA file,
+  plain HTTP, no server, a page that is not a manifest, a full fetch, a
+  bad hash, an oversize and a cut-off download, programs that report
+  another version, a zip without `update.sh`, a tag manifest of another
+  version, a file that is not a zip, a missing release and bad
+  arguments). It then runs `tests/update-apply.sh` (32 checks: install,
+  rollback, an exit after the first frame, status 3 without `ready`,
+  `ready` without `new/`, and power-cut leftovers) under dash.
+- On the device (2026-11-16, device clock 22:55 CST): `tests/update-apply.sh`
+  passed all 32 checks under BusyBox ash from `/tmp`, with its own Wi-Fi
+  fix session paths. A 0.2.99 build of this code (versions changed only for
+  that build) was installed by stage-and-move while the 0.2.0 UI ran, and
+  `moonlight-tsp-stream update-check` over SSH answered `update none -` in
+  0.72 s: TLS with the device's certificates, DNS and the redirects work.
+- The 0.3.0 package build is reproducible (two runs gave the same zip).
 
 ## First launch on the device
 

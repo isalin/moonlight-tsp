@@ -75,6 +75,7 @@ tar --sort=name --mtime=@1767225600 --owner=0 --group=0 --numeric-owner \
 '
 
 cp "$src/package/launch.sh" "$app/launch.sh"
+cp "$src/package/update.sh" "$app/update.sh"
 cat >"$app/config.json" <<EOF
 {
     "label": "Moonlight HW",
@@ -97,6 +98,12 @@ The pairing of the stock Moonlight app is copied on first use, so a PC paired
 with it does not need a new PIN. Settings, keys and logs are kept in
 /mnt/UDISK/trimui-tools/moonlight-tsp/ (logs/ has the last two runs).
 
+Updates: when the app starts, it asks GitHub (github.com/isalin/moonlight-tsp)
+for a newer version and offers to install it. Turn this off in Settings
+("Check for updates at start"); "Check for updates now" checks at any time.
+If an update is cut off by a power loss and this folder is missing, rename
+/.moonlight-tsp-update/previous on the SD card back to Apps/MoonlightTSP.
+
 The launcher never changes CPU governor or frequency settings. It takes part
 in the Moonlight Wi-Fi fix's session contract when that fix is installed.
 
@@ -110,7 +117,8 @@ magick -background none "$src/package/icon.svg" -resize 300x300 -depth 8 \
 
 find "$stage" -type d -exec chmod 755 {} +
 find "$stage" -type f -exec chmod 644 {} +
-chmod 755 "$app/launch.sh" "$app/moonlight-tsp-stream" "$app/moonlight-tsp-ui"
+chmod 755 "$app/launch.sh" "$app/update.sh" "$app/moonlight-tsp-stream" \
+    "$app/moonlight-tsp-ui"
 find "$stage" -exec touch -t 202601010000 {} +
 
 rm -f "$archive"

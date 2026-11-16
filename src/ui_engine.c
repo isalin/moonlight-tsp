@@ -74,7 +74,7 @@ static int spawn(const char *path, const char *const *argv, const char *log,
 }
 
 int engine_spawn(struct engine *e, const char *path, const char *const *args,
-                 const char *log)
+                 const char *log, int append)
 {
     const char *argv[MAX_ARGS + 4];
     int sv[2], child, n = 0, i;
@@ -97,7 +97,7 @@ int engine_spawn(struct engine *e, const char *path, const char *const *args,
         close(sv[0]);
         return -1;
     }
-    if (spawn(path, argv, log, 0, child, &e->pid) != 0) {
+    if (spawn(path, argv, log, append, child, &e->pid) != 0) {
         int err = errno;
 
         close(sv[0]);

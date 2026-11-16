@@ -3,13 +3,16 @@
 # Stands in for moonlight-tsp-stream in UI tests: speaks the IPC protocol on
 # the --ipc-fd socket. Host 10.0.0.2 is unreachable, 10.0.0.3 unpaired.
 # FAKE_STATE (a directory) records pairing and the running app.
+# FAKE_UPDATE: update-check finds nothing new (unset), "available" or
+# "error"; FAKE_FETCH=fail makes update-fetch fail after some progress.
 state=${FAKE_STATE:-/tmp/fake-engine}
 mkdir -p "$state"
 host="" ipc=3 cmd="" arg=""
 while [ $# -gt 0 ]; do
     case $1 in
     --host) host=$2; shift 2 ;;
-    --keydir|--fps|--bitrate|--codec|--port) shift 2 ;;
+    --keydir|--fps|--bitrate|--codec|--port|--stage|--update-url|\
+    --ca-file|--unzip) shift 2 ;;
     --ipc-fd) ipc=$2; shift 2 ;;
     --*) shift ;;
     *) if [ -z "$cmd" ]; then cmd=$1; else arg=$1; fi; shift ;;
@@ -25,6 +28,32 @@ case $cmd in
 reset-display) exit 0 ;;
 esac
 sleep 0.3
+case $cmd in
+update-check)
+    echo "update-check" >> "$state/updates.log"
+    sleep "${FAKE_UPDATE_DELAY:-0}"
+    case ${FAKE_UPDATE:-} in
+    available) say "update available 0.3.1 4312345 Faster pairing and a new stream menu" ;;
+    error) say "update error The connection to GitHub failed. Make sure that Wi-Fi is on."
+           exit 1 ;;
+    *) say "update none 0.3.0" ;;
+    esac
+    exit 0 ;;
+update-fetch)
+    echo "update-fetch $arg" >> "$state/updates.log"
+    total=4312345
+    for got in 0 524288 1310720 2097152 2883584; do
+        say "update progress $got $total"; sleep 0.5
+    done
+    if [ "${FAKE_FETCH:-}" = fail ]; then
+        say "update error The download is damaged. Try again."
+        exit 1
+    fi
+    say "update progress $total $total"
+    say "update verify"; sleep 1
+    say "update staged $arg"
+    exit 0 ;;
+esac
 if [ "$host" = 10.0.0.2 ]; then
     sleep 1
     say "error unreachable"

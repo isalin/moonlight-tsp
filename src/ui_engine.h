@@ -22,10 +22,10 @@ void engine_init(struct engine *e);
 
 /*
  * Starts PATH with ARGS (NULL-terminated, without argv[0]) plus
- * "--ipc-fd 3". LOG is truncated and receives stdout/stderr.
+ * "--ipc-fd 3". LOG receives stdout/stderr; it is truncated unless APPEND.
  */
 int engine_spawn(struct engine *e, const char *path, const char *const *args,
-                 const char *log);
+                 const char *log, int append);
 
 /* Next complete line (without newline) or 0 if none is buffered. */
 int engine_read_line(struct engine *e, char *line, size_t max);
