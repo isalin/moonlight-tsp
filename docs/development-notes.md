@@ -748,6 +748,20 @@ signing (2026-11-16).
   `moonlight-tsp-stream update-check` over SSH answered `update none -` in
   0.72 s: TLS with the device's certificates, DNS and the redirects work.
 - The 0.3.0 package build is reproducible (two runs gave the same zip).
+- First real update (2026-11-16, device clock CST): v0.3.0 was published
+  with `scripts/release.sh 0.3.0 --publish` (zip 4005331 bytes, sha256
+  `7914d7d4…`). The CLI check on the device then answered `update
+  available 0.3.0`. The user opened the 0.2.99 build at 23:04:44 and chose
+  Update. The download, the checks (`unzip: status 0`, both programs
+  answered `0.3.0`) and the exit with status 3 were done at 23:05:00.
+  `update.sh` installed 0.3.0 at 23:05:01, the new UI showed "updated
+  0.2.99 0.3.0", wrote `started` after its first frame, and its start-up
+  check and the user's manual check both reported `none 0.3.0`. All 18
+  installed files matched the release zip; the launcher joined the Wi-Fi
+  fix session (2452 MHz), and the `/tmp` copy of `update.sh` had removed
+  itself. While the new version runs, `update.sh` waits as its parent and
+  the stage holds `previous/` and `started`; it removes the stage when the
+  app exits.
 
 ## First launch on the device
 
