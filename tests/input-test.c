@@ -63,8 +63,12 @@ int LiSendMouseButtonEvent(char action, int button)
 
 int LiSendKeyboardEvent(short vk, char action, char modifiers)
 {
-    rec("key %s %04x", action == KEY_ACTION_DOWN ? "down" : "up",
-        vk & 0xffff);
+    if (modifiers != 0)
+        rec("key %s %04x m%x", action == KEY_ACTION_DOWN ? "down" : "up",
+            vk & 0xffff, modifiers);
+    else
+        rec("key %s %04x", action == KEY_ACTION_DOWN ? "down" : "up",
+            vk & 0xffff);
     return 0;
 }
 
@@ -127,6 +131,8 @@ static void reset(int swap, int mouse)
     I.ax[ABS_RZ] = (struct axis){ 0, 255, 0, 1 };
     I.fd = 99;          /* "pad open": poll_timeout only checks it */
     I.opt.swap_abxy = swap;
+    I.opt.pointer_speed = 0;
+    I.opt.scroll_reverse = 0;
     I.pad = I.masked = 0;
     I.hat_x = I.hat_y = 0;
     I.lx = I.ly = I.rx = I.ry = 0;
@@ -546,6 +552,69 @@ static void test_review_fixes(void)
     check(sent("pad 0 0 0 0 0 0 0"), "pad lost: controller released");
 }
 
+static void test_settings(void)
+{
+    /* Pointer speed scales the full-deflection speed. */
+    reset(0, 1);
+    I.opt.pointer_speed = 50;
+    ev(EV_ABS, ABS_RY, -32767, 0);
+    run(0, 1000 * MS);
+    check(sum_dy < -850 && sum_dy > -950, "pointer 50%: 900 px/s");
+    reset(0, 1);
+    I.opt.pointer_speed = 200;
+    ev(EV_ABS, ABS_RY, -32767, 0);
+    run(0, 1000 * MS);
+    check(sum_dy < -3500 && sum_dy > -3700, "pointer 200%: 3600 px/s");
+
+    /* Reverse scroll turns both wheel directions round. */
+    reset(0, 1);
+    I.opt.scroll_reverse = 1;
+    ev(EV_ABS, ABS_Y, -32767, 0);
+    run(0, 1000 * MS);
+    check(sum_v < -2300 && sum_v > -2500, "reverse: stick up scrolls down");
+    ev(EV_ABS, ABS_Y, 0, 1000 * MS);
+    ev(EV_ABS, ABS_X, 32767, 1000 * MS);
+    run(1000 * MS, 1500 * MS);
+    check(sum_h < -1100 && sum_h > -1300, "reverse: stick right scrolls "
+          "left");
+
+    /* Key taps: modifiers down first and up last, each event with the
+     * modifiers held after it. */
+    reset(0, 0);
+    input_send_key(0x73, INPUT_MOD_ALT);
+    check(strcmp(out, "key down 80a4 m4\nkey down 8073 m4\n"
+                      "key up 8073 m4\nkey up 80a4\n") == 0, "Alt+F4");
+    clear();
+    input_send_key(0x1b, INPUT_MOD_CTRL | INPUT_MOD_SHIFT);
+    check(strcmp(out, "key down 80a2 m2\nkey down 80a0 m3\n"
+                      "key down 801b m3\nkey up 801b m3\n"
+                      "key up 80a0 m2\nkey up 80a2\n") == 0,
+          "Ctrl+Shift+Esc");
+    clear();
+    {
+        struct timespec t0, t1;
+
+        clock_gettime(CLOCK_MONOTONIC, &t0);
+        input_send_key(0x0d, 0);
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        check(strcmp(out, "key down 800d\nkey up 800d\n") == 0, "Enter");
+        check((t1.tv_sec - t0.tv_sec) * 1000000000LL +
+              (t1.tv_nsec - t0.tv_nsec) >= KEY_HOLD_NS, "the key is held "
+              "50 ms");
+    }
+
+    /* The rumble capability goes in the arrival event only with rumble
+     * on. */
+    I.opt.rumble = 0;
+    check((arrival_caps() & LI_CCAP_ANALOG_TRIGGERS) &&
+          !(arrival_caps() & LI_CCAP_RUMBLE), "no rumble: no rumble "
+          "capability");
+    I.opt.rumble = 1;
+    check((arrival_caps() & LI_CCAP_ANALOG_TRIGGERS) &&
+          (arrival_caps() & LI_CCAP_RUMBLE), "rumble: rumble capability");
+    I.opt.rumble = 0;
+}
+
 int main(void)
 {
     test_pad();
@@ -555,6 +624,7 @@ int main(void)
     test_motion();
     test_mode_changes();
     test_review_fixes();
+    test_settings();
     printf("input-test: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

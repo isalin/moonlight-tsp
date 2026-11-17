@@ -28,6 +28,9 @@ enum input_ev {
 struct input_options {
     int swap_abxy;      /* exchange A/B and X/Y (Nintendo-style labels) */
     int mouse;          /* start in mouse mode */
+    int rumble;         /* tell the host the pad can rumble */
+    int pointer_speed;  /* mouse pointer speed in percent (0: 100) */
+    int scroll_reverse; /* the left stick scrolls the other way */
 };
 
 /*
@@ -49,6 +52,19 @@ void input_set_mouse(int on);
 
 /* Sends a one-shot Guide (Xbox button) press. */
 void input_send_guide(void);
+
+/* Win32 modifier bits for input_send_key (the protocol's MODIFIER_*). */
+#define INPUT_MOD_SHIFT 0x01
+#define INPUT_MOD_CTRL 0x02
+#define INPUT_MOD_ALT 0x04
+#define INPUT_MOD_WIN 0x08
+
+/*
+ * Taps a key: presses the modifier keys in MODS (Ctrl, Alt, Shift, Win),
+ * then the Win32 virtual key VK down, holds it 50 ms (without I.lock),
+ * then releases VK and the modifiers. The call takes 50 ms.
+ */
+void input_send_key(int vk, int mods);
 
 /* Prints raw events and the mapped state until SIGINT (button test). */
 int input_dump(void);

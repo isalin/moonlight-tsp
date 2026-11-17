@@ -60,11 +60,16 @@ enum {
 #define TRIG_ON 100                 /* L2/R2 count as pressed above this */
 #define TRIG_OFF 60                 /* and as released below this */
 #define TRIG_REST 16                /* below this a trigger is at rest */
+#define KEY_HOLD_NS 50000000L       /* a sent key is held 50 ms */
 
 /* Win32 virtual key codes (the protocol's key codes). Like the other
  * Moonlight clients, the engine sends them with 0x80 in the high byte. */
 #define VK_FLAG 0x8000
 #define VK_RETURN 0x0D
+#define VK_LWIN 0x5B
+#define VK_LSHIFT 0xA0
+#define VK_LCONTROL 0xA2
+#define VK_LMENU 0xA4
 #define VK_LEFT 0x25
 #define VK_UP 0x26
 #define VK_RIGHT 0x27
@@ -377,6 +382,14 @@ static void mark_menu_used(void)
         I.menu_used = 1;
 }
 
+/* Host pixels/s at full deflection, from the speed setting. */
+static float pointer_max(void)
+{
+    int pct = I.opt.pointer_speed > 0 ? I.opt.pointer_speed : 100;
+
+    return POINTER_MAX * (float)pct / 100.0f;
+}
+
 static void stop_motion(void)
 {
     I.acc_x = I.acc_y = I.acc_v = I.acc_h = 0;
@@ -436,7 +449,7 @@ static void mouse_motion(uint64_t now)
     I.next_tick = now + MOUSE_TICK_NS;
     if (u > 0) {
         /* Cubic-ish curve: slow and precise near the centre. */
-        float speed = POINTER_MAX * u * u * (0.3f + 0.7f * u) / m;
+        float speed = pointer_max() * u * u * (0.3f + 0.7f * u) / m;
         int dx, dy;
 
         I.acc_x += px * speed * dt;
@@ -452,11 +465,18 @@ static void mouse_motion(uint64_t now)
     } else {
         I.acc_x = I.acc_y = 0;
     }
-    /* Stick up scrolls up (positive), stick right scrolls right. */
-    sent |= scroll(&I.acc_v, copysignf(SCROLL_MAX * sv * sv, (float)ly),
-                   dt, 0);
-    sent |= scroll(&I.acc_h, copysignf(SCROLL_MAX * sh * sh, (float)lx),
-                   dt, 1);
+    /* Stick up scrolls up (positive), stick right scrolls right; the
+     * reverse setting turns both round. */
+    {
+        float dir = I.opt.scroll_reverse ? -1.0f : 1.0f;
+
+        sent |= scroll(&I.acc_v,
+                       dir * copysignf(SCROLL_MAX * sv * sv, (float)ly),
+                       dt, 0);
+        sent |= scroll(&I.acc_h,
+                       dir * copysignf(SCROLL_MAX * sh * sh, (float)lx),
+                       dt, 1);
+    }
     if (sent)
         mark_menu_used();
 }
@@ -765,6 +785,14 @@ static void *reader(void *arg)
     return NULL;
 }
 
+/* The pad's capabilities in the arrival event: rumble only when it is
+ * on, so the host does not send rumble that nothing plays. */
+static uint16_t arrival_caps(void)
+{
+    return (uint16_t)(LI_CCAP_ANALOG_TRIGGERS |
+                      (I.opt.rumble ? LI_CCAP_RUMBLE : 0));
+}
+
 int input_start(const struct input_options *opt, int wake_fd)
 {
     if (I.running)
@@ -796,13 +824,16 @@ int input_start(const struct input_options *opt, int wake_fd)
     } else {
         read_absinfo(I.fd);
         printf("input: %s, menu tap pauses, menu held is a mouse, "
-               "start+select+L1+R1 held 1 s exits%s%s\n", INPUT_DEVICE_NAME,
+               "start+select+L1+R1 held 1 s exits%s%s, pointer %d%%%s\n",
+               INPUT_DEVICE_NAME,
                I.opt.swap_abxy ? ", A/B X/Y swapped" : "",
-               I.mouse_on ? ", mouse mode on" : "");
+               I.mouse_on ? ", mouse mode on" : "",
+               I.opt.pointer_speed > 0 ? I.opt.pointer_speed : 100,
+               I.opt.scroll_reverse ? ", scroll reversed" : "");
         fflush(stdout);
     }
     LiSendControllerArrivalEvent(0, 0x1, LI_CTYPE_XBOX, SUPPORTED_FLAGS,
-                                 LI_CCAP_ANALOG_TRIGGERS);
+                                 arrival_caps());
     pthread_mutex_lock(&I.lock);
     sync_host(now_ns());
     pthread_mutex_unlock(&I.lock);
@@ -874,6 +905,44 @@ void input_send_guide(void)
     pthread_mutex_lock(&I.lock);
     LiSendMultiControllerEvent(0, 0x1, 0, 0, 0, 0, 0, 0, 0);
     I.neutral_sent = 1;
+    pthread_mutex_unlock(&I.lock);
+}
+
+void input_send_key(int vk, int mods)
+{
+    static const struct { int mod; short vk; } order[] = {
+        { INPUT_MOD_CTRL, VK_LCONTROL }, { INPUT_MOD_ALT, VK_LMENU },
+        { INPUT_MOD_SHIFT, VK_LSHIFT }, { INPUT_MOD_WIN, VK_LWIN },
+    };
+    /* Held as a short real key press: a game that reads the key state
+     * once a frame does not see a press shorter than a frame. */
+    struct timespec hold = { 0, KEY_HOLD_NS };
+    int i, held = 0;
+
+    pthread_mutex_lock(&I.lock);
+    /* Each event carries the modifiers held after it, as a real
+     * keyboard reports them. */
+    for (i = 0; i < (int)NELEM(order); i++) {
+        if (!(mods & order[i].mod))
+            continue;
+        held |= order[i].mod;
+        LiSendKeyboardEvent((short)(VK_FLAG | order[i].vk), KEY_ACTION_DOWN,
+                            (char)held);
+    }
+    LiSendKeyboardEvent((short)(VK_FLAG | (vk & 0xff)), KEY_ACTION_DOWN,
+                        (char)held);
+    pthread_mutex_unlock(&I.lock);
+    nanosleep(&hold, NULL);
+    pthread_mutex_lock(&I.lock);
+    LiSendKeyboardEvent((short)(VK_FLAG | (vk & 0xff)), KEY_ACTION_UP,
+                        (char)held);
+    for (i = (int)NELEM(order) - 1; i >= 0; i--) {
+        if (!(held & order[i].mod))
+            continue;
+        held &= ~order[i].mod;
+        LiSendKeyboardEvent((short)(VK_FLAG | order[i].vk), KEY_ACTION_UP,
+                            (char)held);
+    }
     pthread_mutex_unlock(&I.lock);
 }
 

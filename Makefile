@@ -82,13 +82,13 @@ $(BUILD)/obj/tp/%.o: $(TP)/%.c $(DEPS_STAMP)
 # ---- engine ------------------------------------------------------------
 ENGINE_SRCS = src/stream_main.c src/video_cedar.c src/audio_alsa.c \
 	src/input_evdev.c src/wifi_ps.c src/fdguard.c src/update.c \
-	src/update_manifest.c $(VIDEO_SRCS)
+	src/update_manifest.c src/rumble.c $(VIDEO_SRCS)
 ENGINE_OBJS = $(patsubst src/%.c,$(BUILD)/obj/engine/%.o,$(ENGINE_SRCS))
 ENGINE_CFLAGS = $(CFLAGS) -I$(COMMON)/src -I$(GS) -I$(DEPS)/include
 
 $(BUILD)/obj/engine/%.o: src/%.c $(VIDEO_HDRS) src/video_cedar.h \
 		src/audio_alsa.h src/input_evdev.h src/wifi_ps.h src/fdguard.h \
-		src/update.h $(DEPS_STAMP)
+		src/update.h src/rumble.h $(DEPS_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(ENGINE_CFLAGS) -c -o $@ $<
 
@@ -177,14 +177,21 @@ $(BUILD)/update-test: tests/update-test.c src/update_manifest.c src/update.h \
 $(BUILD)/status-test: tests/status-test.c src/ui_status.c src/ui_status.h \
 		| $(BUILD)
 	$(CC) $(CFLAGS) -o $@ tests/status-test.c src/ui_status.c
+# rumble-test uses a normal file as the GPIO value file.
+$(BUILD)/rumble-test: tests/rumble-test.c src/rumble.c src/rumble.h \
+		src/fdguard.c src/fdguard.h | $(BUILD)
+	$(CC) $(CFLAGS) -o $@ tests/rumble-test.c src/fdguard.c \
+		-lpthread $(FDGUARD_LDFLAGS)
 check: $(BUILD)/mdns-test $(BUILD)/dump-test $(BUILD)/fdguard-test \
-		$(BUILD)/input-test $(BUILD)/update-test $(BUILD)/status-test
+		$(BUILD)/input-test $(BUILD)/update-test $(BUILD)/status-test \
+		$(BUILD)/rumble-test
 	$(BUILD)/mdns-test
 	$(BUILD)/dump-test
 	$(BUILD)/fdguard-test
 	$(BUILD)/input-test
 	$(BUILD)/update-test
 	$(BUILD)/status-test
+	$(BUILD)/rumble-test
 
 clean:
 	rm -rf $(BUILD)

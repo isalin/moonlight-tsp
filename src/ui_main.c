@@ -29,11 +29,12 @@
 #include "ui_config.h"
 #include "ui_draw.h"
 #include "ui_engine.h"
+#include "input_evdev.h"
 #include "ui_mdns.h"
 #include "ui_pad.h"
 #include "ui_status.h"
 
-#define UI_VERSION "0.3.1"
+#define UI_VERSION "0.4.0"
 #define DEFAULT_DATA "/mnt/UDISK/trimui-tools/moonlight-tsp"
 /* launch.sh sets MLTSP_STAGE to this folder on the app's SD card. */
 #define DEFAULT_STAGE "/mnt/SDCARD/.moonlight-tsp-update"
@@ -81,7 +82,7 @@
 static int row_h = ROW_H, row_pitch = ROW_PITCH;
 
 enum screen { S_HOSTS, S_SEARCH, S_ADDIP, S_APPS, S_PAIR, S_SETTINGS,
-              S_BUSY, S_CONNECTING, S_STREAM, S_MENU };
+              S_BUSY, S_CONNECTING, S_STREAM, S_MENU, S_KEYS };
 
 /* J_PROBE: "info" for a search result (J.host is its index in U.md).
  * The update jobs have no host (J.host is -1). */
@@ -148,6 +149,7 @@ static struct {
     struct mdns md;
     struct ui_config cfg;
     int sfd;
+    pid_t rumble_pid;       /* a rumble test from Settings, or 0 */
 
     enum screen scr;
     struct dialog dlg;
@@ -158,7 +160,8 @@ static struct {
 
     /* hosts */
     struct hstatus hs[CFG_MAX_HOSTS];
-    struct listview lv_hosts, lv_search, lv_apps, lv_settings, lv_menu;
+    struct listview lv_hosts, lv_search, lv_apps, lv_settings, lv_menu,
+                    lv_keys;
     int host;               /* selected host */
 
     /* apps of the selected host */
@@ -381,7 +384,7 @@ static const char *codec_arg(void)
 static int job_start(enum job kind, int host, const char *cmd,
                      const char *arg, uint64_t timeout)
 {
-    static char fps[16], bitrate[16];
+    static char fps[16], bitrate[16], pointer[16], rumble[16];
     const char *args[32];
     int upd = kind == J_UPDATE_CHECK || kind == J_UPDATE_FETCH;
     const char *log = kind == J_STREAM ? U.stream_log :
@@ -432,6 +435,20 @@ static int job_start(enum job kind, int host, const char *cmd,
             args[n++] = "--sops";
         if (!U.cfg.wifi_ps_off)
             args[n++] = "--keep-wifi-ps";
+        if (U.cfg.rumble > 0) {
+            snprintf(rumble, sizeof(rumble), "%d", U.cfg.rumble);
+            args[n++] = "--rumble";
+            args[n++] = rumble;
+        }
+        if (U.cfg.local_audio)
+            args[n++] = "--local-audio";
+        if (U.cfg.pointer_speed != 100) {
+            snprintf(pointer, sizeof(pointer), "%d", U.cfg.pointer_speed);
+            args[n++] = "--pointer-speed";
+            args[n++] = pointer;
+        }
+        if (U.cfg.scroll_reverse)
+            args[n++] = "--scroll-reverse";
         /* Keep the previous session's log for comparison. */
         {
             char prev[PATH_MAX + 8];
@@ -1320,7 +1337,8 @@ static void recheck_hosts(void)
 
 /* ---- navigation ------------------------------------------------------- */
 
-static void list_move(struct listview *l, int n, int d)
+/* Moves the selection by D in a list of N with ROWS rows on screen. */
+static void list_move_rows(struct listview *l, int n, int d, int rows)
 {
     if (n <= 0) {
         l->sel = l->top = 0;
@@ -1333,9 +1351,14 @@ static void list_move(struct listview *l, int n, int d)
         l->sel = d > 1 ? n - 1 : 0;
     if (l->sel < l->top)
         l->top = l->sel;
-    if (l->sel >= l->top + LIST_ROWS)
-        l->top = l->sel - LIST_ROWS + 1;
+    if (l->sel >= l->top + rows)
+        l->top = l->sel - rows + 1;
     redraw();
+}
+
+static void list_move(struct listview *l, int n, int d)
+{
+    list_move_rows(l, n, d, LIST_ROWS);
 }
 
 static void list_clamp(struct listview *l, int n)
@@ -1528,18 +1551,73 @@ static void add_search_result(int r)
 
 /* ---- stream menu ------------------------------------------------------ */
 
-enum { MI_RESUME, MI_MOUSE, MI_GUIDE, MI_DISCONNECT, MI_QUIT, MENU_N };
+enum { MI_RESUME, MI_MOUSE, MI_KEYS, MI_GUIDE, MI_DISCONNECT, MI_QUIT,
+       MENU_N };
 
-static const char *menu_item(int i)
+/* The paused menu and the Send key list: rows of 52 px every 60 px. */
+#define MENU_ROW_H 52
+#define MENU_PITCH 60
+#define MENU_ROWS 8
+#define MENU_W 620
+
+static const char *menu_item(int i, const char **help)
 {
     switch (i) {
-    case MI_RESUME: return "Resume";
-    case MI_MOUSE: return J.mouse ? "Mouse mode: On" : "Mouse mode: Off";
-    case MI_GUIDE: return "Send Home (Guide) button";
-    case MI_DISCONNECT: return "Disconnect";
-    default: return "Quit app and disconnect";
+    case MI_RESUME:
+        *help = "Go back to the stream. B and MENU also go back.";
+        return "Resume";
+    case MI_MOUSE:
+        *help = "Hold MENU during play to use the pad as a mouse. On keeps "
+                "the mouse on. Right stick: pointer. Left stick: scroll. "
+                "A, L1, R1: left click. B, L2, R2: right click. X: middle "
+                "click. Y: Enter. D-pad: arrow keys.";
+        return J.mouse ? "Mouse mode: On" : "Mouse mode: Off";
+    case MI_KEYS:
+        *help = "Send a key or a key combination to the PC, for example "
+                "Alt+Tab or Win+D.";
+        return "Send key";
+    case MI_GUIDE:
+        *help = "Sends the Home (Guide) button of the pad. On many PCs, it "
+                "opens Steam Big Picture or the Xbox Game Bar.";
+        return "Send Home (Guide) button";
+    case MI_DISCONNECT:
+        *help = "Stops the stream. The app continues on the PC, so you can "
+                "resume it later.";
+        return "Disconnect";
+    default:
+        *help = "Closes the app on the PC and stops the stream. Make sure "
+                "that you saved the game.";
+        return "Quit app and disconnect";
     }
 }
+
+/* The Send key list. VK is a Windows virtual-key code. */
+static const struct send_key {
+    const char *name;
+    int vk, mods;
+    const char *help;
+} send_keys[] = {
+    { "Esc", 0x1B, 0, "Closes menus and dialog boxes in many games and "
+      "apps." },
+    { "Tab", 0x09, 0, "Moves to the next field or button." },
+    { "Enter", 0x0D, 0, "Starts or accepts the selected item." },
+    { "Windows", 0x5B, 0, "Opens or closes the Start menu." },
+    { "Alt+Tab", 0x09, INPUT_MOD_ALT, "Goes to the window that you used "
+      "before." },
+    { "Alt+F4", 0x73, INPUT_MOD_ALT, "Closes the active window. Make sure "
+      "that you saved the game." },
+    { "Alt+Enter", 0x0D, INPUT_MOD_ALT, "Changes many games between full "
+      "screen and a window." },
+    { "Win+D", 0x44, INPUT_MOD_WIN, "Shows the desktop. Send it again to "
+      "show the windows again." },
+    { "Win+G", 0x47, INPUT_MOD_WIN, "Opens the Xbox Game Bar." },
+    { "Ctrl+Shift+Esc", 0x1B, INPUT_MOD_CTRL | INPUT_MOD_SHIFT, "Opens the "
+      "Task Manager." },
+    { "Print Screen", 0x2C, 0, "Makes a screenshot on the PC." },
+    { "F11", 0x7A, 0, "Changes many browsers and apps between full screen "
+      "and a window." },
+};
+#define NSEND_KEYS ((int)(sizeof(send_keys) / sizeof(send_keys[0])))
 
 static void stream_stop(int quit_app)
 {
@@ -1573,6 +1651,10 @@ static void menu_key(enum ui_key k)
             engine_send(&U.eng, "resume");
             enter_stream_screen();
             break;
+        case MI_KEYS:
+            U.scr = S_KEYS;
+            redraw();
+            break;
         case MI_GUIDE:
             engine_send(&U.eng, "resume");
             engine_send(&U.eng, "guide");
@@ -1591,13 +1673,69 @@ static void menu_key(enum ui_key k)
     }
 }
 
+static void keys_key(enum ui_key k)
+{
+    struct listview *l = &U.lv_keys;
+
+    switch (k) {
+    case UK_UP: list_move_rows(l, NSEND_KEYS, -1, MENU_ROWS); break;
+    case UK_DOWN: list_move_rows(l, NSEND_KEYS, 1, MENU_ROWS); break;
+    case UK_L1: list_move_rows(l, NSEND_KEYS, -MENU_ROWS, MENU_ROWS); break;
+    case UK_R1: list_move_rows(l, NSEND_KEYS, MENU_ROWS, MENU_ROWS); break;
+    case UK_B:
+        U.scr = S_MENU;
+        redraw();
+        break;
+    case UK_MENU:
+        engine_send(&U.eng, "resume");
+        enter_stream_screen();
+        break;
+    case UK_A: {
+        const struct send_key *sk = &send_keys[l->sel];
+        char line[32];
+
+        /* Resume first, so the key goes to the window on the screen. */
+        log_msg("stream: send key %s", sk->name);
+        snprintf(line, sizeof(line), "key %d %d", sk->vk, sk->mods);
+        engine_send(&U.eng, "resume");
+        engine_send(&U.eng, line);
+        enter_stream_screen();
+        break;
+    }
+    default:
+        break;
+    }
+}
+
 /* ---- settings --------------------------------------------------------- */
 
 static const int bitrates[] = { 5000, 8000, 10000, 15000, 20000, 30000 };
 #define NBITRATES 6
+static const int pointer_speeds[] = { 50, 75, 100, 125, 150, 200 };
+#define NPOINTER_SPEEDS 6
 
-enum { ST_FPS, ST_BITRATE, ST_CODEC, ST_SWAP, ST_QUIT_AFTER, ST_WIFI_PS,
-       ST_SOPS, ST_UPDATE_CHECK, ST_UPDATE_NOW, SETTINGS_N };
+/* In topic order: stream, controls, sound, Wi-Fi, PC, updates. The table
+ * in tests/ui-screens.sh must have the same order. */
+enum { ST_FPS, ST_BITRATE, ST_CODEC, ST_SWAP, ST_RUMBLE, ST_POINTER,
+       ST_SCROLL, ST_LOCAL_AUDIO, ST_WIFI_PS, ST_QUIT_AFTER, ST_SOPS,
+       ST_UPDATE_CHECK, ST_UPDATE_NOW, SETTINGS_N };
+
+/* Steps through the values of TABLE from CUR by D, with wrap-around. */
+static int step_value(const int *table, int n, int cur, int d)
+{
+    int j;
+
+    for (j = 0; j < n && table[j] < cur; j++)
+        ;
+    if (j < n && table[j] != cur && d > 0)
+        j--;            /* a value between two steps: the next is j */
+    j += d;
+    if (j < 0)
+        j = n - 1;
+    if (j >= n)
+        j = 0;
+    return table[j];
+}
 
 static void setting_text(int i, const char **label, char *value, size_t max,
                          const char **help)
@@ -1629,6 +1767,36 @@ static void setting_text(int i, const char **label, char *value, size_t max,
         snprintf(value, max, "%s", c->swap_abxy ? "On" : "Off");
         *help = "Off: the bottom button sends A, as on an Xbox pad. On: each "
                 "button sends its printed letter.";
+        break;
+    case ST_RUMBLE:
+        *label = "Rumble strength";
+        if (c->rumble > 0) {
+            snprintf(value, max, "%d%%", c->rumble);
+            *help = "The strength of the rumble when the game rumbles the "
+                    "pad. Press A for a test rumble.";
+        } else {
+            snprintf(value, max, "Off");
+            *help = "Off: the handheld does not rumble. Push Right to set "
+                    "a strength.";
+        }
+        break;
+    case ST_POINTER:
+        *label = "Mouse pointer speed";
+        snprintf(value, max, "%d%%", c->pointer_speed);
+        *help = "The speed at which the right stick moves the mouse pointer "
+                "in mouse mode.";
+        break;
+    case ST_SCROLL:
+        *label = "Mouse scroll direction";
+        snprintf(value, max, "%s", c->scroll_reverse ? "Reverse" : "Normal");
+        *help = "Normal: push the left stick up to scroll up in mouse mode. "
+                "Reverse: push it up to scroll down.";
+        break;
+    case ST_LOCAL_AUDIO:
+        *label = "Play the sound on the PC too";
+        snprintf(value, max, "%s", c->local_audio ? "On" : "Off");
+        *help = "On: the speakers of the PC also play the sound. The "
+                "handheld always plays it.";
         break;
     case ST_QUIT_AFTER:
         *label = "Quit the PC app on disconnect";
@@ -1666,26 +1834,29 @@ static void setting_text(int i, const char **label, char *value, size_t max,
 static void setting_change(int i, int d)
 {
     struct ui_config *c = &U.cfg;
-    int j;
 
     switch (i) {
     case ST_FPS:
         c->fps = c->fps == 60 ? 30 : 60;
         break;
     case ST_BITRATE:
-        for (j = 0; j < NBITRATES && bitrates[j] < c->bitrate; j++)
-            ;
-        j += d;
-        if (j < 0)
-            j = NBITRATES - 1;
-        if (j >= NBITRATES)
-            j = 0;
-        c->bitrate = bitrates[j];
+        c->bitrate = step_value(bitrates, NBITRATES, c->bitrate, d);
         break;
     case ST_CODEC:
         c->codec = (c->codec + (d > 0 ? 1 : 2)) % 3;
         break;
     case ST_SWAP: c->swap_abxy = !c->swap_abxy; break;
+    case ST_RUMBLE:
+        /* 0-100% in steps of 5, with no wrap-around. */
+        c->rumble += d > 0 ? 5 : -5;
+        c->rumble = c->rumble < 0 ? 0 : c->rumble > 100 ? 100 : c->rumble;
+        break;
+    case ST_POINTER:
+        c->pointer_speed = step_value(pointer_speeds, NPOINTER_SPEEDS,
+                                      c->pointer_speed, d);
+        break;
+    case ST_SCROLL: c->scroll_reverse = !c->scroll_reverse; break;
+    case ST_LOCAL_AUDIO: c->local_audio = !c->local_audio; break;
     case ST_QUIT_AFTER: c->quit_after = !c->quit_after; break;
     case ST_WIFI_PS: c->wifi_ps_off = !c->wifi_ps_off; break;
     case ST_SOPS: c->sops = !c->sops; break;
@@ -1926,6 +2097,25 @@ static void search_key(enum ui_key k)
     }
 }
 
+/* A 0.5 s rumble at the selected strength. It runs next to any job; a
+ * second press while it runs does nothing. */
+static void rumble_test(void)
+{
+    char pct[16];
+    const char *argv[] = { U.engine_path, "rumble-test", pct, NULL };
+
+    if (U.rumble_pid > 0 || U.cfg.rumble <= 0)
+        return;
+    snprintf(pct, sizeof(pct), "%d", U.cfg.rumble);
+    if (engine_spawn_plain(U.engine_path, argv, U.engine_log,
+                           &U.rumble_pid) != 0) {
+        log_msg("rumble test: spawn failed: %s", strerror(errno));
+        U.rumble_pid = 0;
+        return;
+    }
+    log_msg("rumble test at %d%% (pid %d)", U.cfg.rumble, (int)U.rumble_pid);
+}
+
 static void settings_key(enum ui_key k)
 {
     switch (k) {
@@ -1937,6 +2127,8 @@ static void settings_key(enum ui_key k)
         if (U.lv_settings.sel == ST_UPDATE_NOW) {
             save_config();
             start_manual_update_check();
+        } else if (U.lv_settings.sel == ST_RUMBLE) {
+            rumble_test();
         } else {
             setting_change(U.lv_settings.sel, 1);
         }
@@ -1996,6 +2188,7 @@ static void handle_key(enum ui_key k)
     case S_APPS: apps_key(k); break;
     case S_SETTINGS: settings_key(k); break;
     case S_MENU: menu_key(k); break;
+    case S_KEYS: keys_key(k); break;
     case S_PAIR:
     case S_BUSY:
     case S_CONNECTING:
@@ -2404,26 +2597,59 @@ static void render_connecting(void)
     draw_hints(h, 1);
 }
 
+static int wrap_text(int font, const char *t, int width, char out[][320],
+                     int max);
+
+/* A row of the paused menu or the Send key list. */
+static void draw_menu_row(int vis, int selected, const char *text)
+{
+    int ry = LIST_Y + vis * MENU_PITCH;
+
+    draw_round_rect(LIST_X, ry, MENU_W, MENU_ROW_H, 12,
+                    selected ? C_SEL : C_ROW);
+    draw_text(F_BODY, LIST_X + 28, ry + (MENU_ROW_H -
+              draw_font_height(F_BODY)) / 2, C_TEXT, text, AL_LEFT,
+              MENU_W - 50);
+}
+
+/* Help for the selected row, in the right column from Y. */
+static void draw_side_help(int y, const char *help, int max_lines)
+{
+    char lines[6][320];
+    int i, n;
+
+    if (max_lines > 6)
+        max_lines = 6;
+    n = wrap_text(F_SMALL, help, 500, lines, max_lines);
+    for (i = 0; i < n; i++)
+        draw_text(F_SMALL, 724, y + i * 32, C_DIM, lines[i], AL_LEFT, 516);
+}
+
+static void draw_disconnect_note(void)
+{
+    draw_text(F_SMALL, LIST_X, 600, C_DIM, "Hold START+SELECT+L1+R1 for one "
+              "second during play to disconnect at once.", AL_LEFT, 1200);
+}
+
 static void render_menu(void)
 {
     static const struct hint h[] = {
         { "A", "Select" }, { "B", "Resume" },
     };
     char title[128];
+    const char *help = "", *hp;
     int i, x = 720, y = LIST_Y;
 
     snprintf(title, sizeof(title), "Paused: %s", J.app_name);
     draw_header(title, host_name(J.host));
     for (i = 0; i < MENU_N; i++) {
-        int ry = LIST_Y + i * ROW_PITCH;
+        const char *text = menu_item(i, &hp);
 
-        draw_round_rect(LIST_X, ry, 620, ROW_H, 12,
-                        i == U.lv_menu.sel ? C_SEL : C_ROW);
-        draw_text(F_BODY, LIST_X + 28, ry + (ROW_H -
-                  draw_font_height(F_BODY)) / 2, C_TEXT, menu_item(i),
-                  AL_LEFT, 570);
+        if (i == U.lv_menu.sel)
+            help = hp;
+        draw_menu_row(i, i == U.lv_menu.sel, text);
     }
-    draw_round_rect(x, y, 520, 4 * ROW_PITCH - 8, 12, C_ROW);
+    draw_round_rect(x, y, 520, 280, 12, C_ROW);
     draw_text(F_BODY, x + 24, y + 14, C_TEXT, "Stream", AL_LEFT, 0);
     if (U.l_valid) {
         char b[6][96];
@@ -2442,16 +2668,59 @@ static void render_menu(void)
             draw_text(F_SMALL, x + 24, y + 62 + i * 34, C_DIM, b[i],
                       AL_LEFT, 470);
     }
-    draw_text(F_SMALL, LIST_X, 504, C_DIM, "Hold MENU during play to use the "
-              "pad as a mouse. \"Mouse mode: On\" keeps the mouse on.",
-              AL_LEFT, 1200);
-    draw_text(F_SMALL, LIST_X, 536, C_DIM, "Right stick: pointer. Left stick: "
-              "scroll. A, L1, R1: left click. B, L2, R2: right click.",
-              AL_LEFT, 1200);
-    draw_text(F_SMALL, LIST_X, 568, C_DIM, "X: middle click. Y: Enter. D-pad: "
-              "arrow keys.", AL_LEFT, 1200);
-    draw_text(F_SMALL, LIST_X, 602, C_DIM, "Hold START+SELECT+L1+R1 for one "
-              "second during play to disconnect at once.", AL_LEFT, 1200);
+    draw_side_help(y + 300, help, 5);
+    draw_disconnect_note();
+    draw_hints(h, 2);
+}
+
+static void render_keys(void)
+{
+    static const struct hint h[] = {
+        { "A", "Send" }, { "B", "Back" },
+    };
+    struct listview *l = &U.lv_keys;
+    const struct send_key *sel;
+    char title[128];
+    int i, x = 720, y = LIST_Y;
+
+    snprintf(title, sizeof(title), "Send key: %s", J.app_name);
+    draw_header(title, host_name(J.host));
+    if (l->sel < 0 || l->sel >= NSEND_KEYS)
+        l->sel = 0;
+    if (l->top > l->sel)
+        l->top = l->sel;
+    if (l->sel >= l->top + MENU_ROWS)
+        l->top = l->sel - MENU_ROWS + 1;
+    for (i = l->top; i < NSEND_KEYS && i < l->top + MENU_ROWS; i++)
+        draw_menu_row(i - l->top, i == l->sel, send_keys[i].name);
+    {
+        /* Scroll bar beside the rows, if the list does not fit. A
+         * variable, so a short list gives no division by zero warning. */
+        int n = NSEND_KEYS;
+        int span = MENU_ROWS * MENU_PITCH - 8;
+
+        if (n > MENU_ROWS) {
+            int bh = span * MENU_ROWS / n;
+            int by = LIST_Y + (span - bh) * l->top / (n - MENU_ROWS);
+
+            draw_round_rect(LIST_X + MENU_W + 12, by, 8, bh, 4, C_DIM);
+        }
+    }
+    sel = &send_keys[l->sel];
+    draw_round_rect(x, y, 520, 200, 12, C_ROW);
+    draw_text(F_TITLE, x + 24, y + 20, C_TEXT, sel->name, AL_LEFT, 470);
+    {
+        char lines[3][320];
+        int n = wrap_text(F_SMALL, sel->help, 470, lines, 3);
+
+        for (i = 0; i < n; i++)
+            draw_text(F_SMALL, x + 24, y + 84 + i * 32, C_DIM, lines[i],
+                      AL_LEFT, 470);
+    }
+    draw_side_help(y + 220, "The PC gets the key at once, and the stream "
+                   "continues. The key goes to the window that has the "
+                   "focus on the PC.", 4);
+    draw_disconnect_note();
     draw_hints(h, 2);
 }
 
@@ -2463,6 +2732,9 @@ static void render_settings(void)
     };
     static const struct hint ha[] = {
         { "A", "Check" }, { "B", "Save and back" },
+    };
+    static const struct hint hr[] = {
+        { "<>", "Change" }, { "A", "Test" }, { "B", "Save and back" },
     };
     const char *help = "";
     int i;
@@ -2485,7 +2757,10 @@ static void render_settings(void)
               help, AL_LEFT, LIST_W);
     row_h = ROW_H;
     row_pitch = ROW_PITCH;
-    draw_hints(l->sel == ST_UPDATE_NOW ? ha : h, 2);
+    if (l->sel == ST_RUMBLE && U.cfg.rumble > 0)
+        draw_hints(hr, 3);
+    else
+        draw_hints(l->sel == ST_UPDATE_NOW ? ha : h, 2);
 }
 
 #define DIALOG_LINES 5
@@ -2570,6 +2845,7 @@ static void render(void)
     case S_BUSY: render_busy(); break;
     case S_CONNECTING: render_connecting(); break;
     case S_MENU: render_menu(); break;
+    case S_KEYS: render_keys(); break;
     case S_STREAM: break;
     }
     if (U.dlg.active && U.scr != S_STREAM)
@@ -2959,6 +3235,12 @@ int main(int argc, char **argv)
         }
         if (J.kind != J_NONE && engine_reap(&U.eng))
             job_finished();
+        if (U.rumble_pid > 0) {
+            int st;
+
+            if (waitpid(U.rumble_pid, &st, WNOHANG) != 0)
+                U.rumble_pid = 0;
+        }
         if (i_pad >= 0 && (p[i_pad].revents & POLLIN)) {
             int n = ui_pad_read(&U.pad, keys, 16);
 

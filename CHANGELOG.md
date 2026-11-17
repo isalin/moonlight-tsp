@@ -4,6 +4,28 @@ The first line of each section is its summary, at most 60 characters. The
 app shows that line when it offers the update. `scripts/release.sh` puts
 the section into the GitHub release notes.
 
+## 0.4.0
+
+Rumble, a Send key list, PC sound and mouse settings
+
+- The handheld rumbles when the game rumbles the pad. "Rumble strength"
+  in Settings sets the strength: Off, or 5% to 100% in steps of 5%. Press
+  A on that row for a 0.5 s test rumble at the selected strength. The
+  built-in motor can only be on or off, so the app turns it on and off
+  fast to make weak and strong rumble. The motor stops when you open the
+  stream menu and when the stream ends.
+- "Send key" in the stream menu sends a key or a key combination to the
+  PC: Esc, Tab, Enter, Windows, Alt+Tab, Alt+F4, Alt+Enter, Win+D, Win+G,
+  Ctrl+Shift+Esc, Print Screen and F11. The stream continues at once.
+- New setting "Play the sound on the PC too": the speakers of the PC also
+  play the sound.
+- New settings "Mouse pointer speed" (50% to 200%) and "Mouse scroll
+  direction" (Normal or Reverse) for mouse mode.
+- The stream menu shows a help text for the selected item.
+- The settings have a new order: stream, controls, sound, Wi-Fi, PC and
+  updates.
+- `moonlight-tsp-stream rumble-test [PCT]` makes one 0.5 s rumble.
+
 ## 0.3.1
 
 Shows battery and Wi-Fi status at the top right

@@ -22,7 +22,7 @@ CrossMix-OS 1.3.0. Expect some problems.
 
 | Stream menu (press MENU) | Settings |
 |---|---|
-| ![The paused stream menu with Resume, Mouse mode, Send Home (Guide) button, Disconnect, and Quit app and disconnect, next to live stream figures](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, quit on disconnect, Wi-Fi power saving and game optimization, with a scroll bar for the update settings below them](docs/screenshots/settings.png) |
+| ![The paused stream menu with Resume, Mouse mode, Send key, Send Home (Guide) button, Disconnect, and Quit app and disconnect, next to live stream figures and a help text for the selected item](docs/screenshots/stream-menu.png) | ![Settings: frame rate, bitrate, video codec, button swap, rumble strength, mouse pointer speed and mouse scroll direction, with a scroll bar for the settings below them](docs/screenshots/settings.png) |
 
 These images are the real screens of the app, at the 1280x720 size of the
 handheld screen. `scripts/ui-screens.sh` made them with sample PCs and a
@@ -77,13 +77,22 @@ saves.
 - Pairing data from the stock Moonlight app. At its first start, Moonlight
   HW copies this pairing, so a PC that is already paired does not need a
   new PIN.
-- A stream menu (press MENU) with Resume, Mouse mode, Send Home (Guide)
-  button, Disconnect, and Quit app and disconnect. If you hold
+- A stream menu (press MENU) with Resume, Mouse mode, Send key, Send Home
+  (Guide) button, Disconnect, and Quit app and disconnect. If you hold
   START+SELECT+L1+R1 for one second, the client disconnects at once.
+- Send key: a list of keys and key combinations for the PC (Esc, Tab,
+  Enter, Windows, Alt+Tab, Alt+F4, Alt+Enter, Win+D, Win+G,
+  Ctrl+Shift+Esc, Print Screen and F11).
+- Rumble on the built-in motor, with a strength setting (Off, or 5% to
+  100%) and a test rumble in Settings. The motor can only be on or off, so
+  the app turns it on and off fast (every 20 ms) to make weak and strong
+  rumble.
 - Mouse mode, while you hold MENU or after you set "Mouse mode: On" in the
   stream menu. The right stick moves the pointer, and the left stick
   scrolls. A, L1 and R1 give a left click. B, L2 and R2 give a right click.
   X gives a middle click, Y sends Enter, and the D-pad sends the arrow keys.
+  Settings change the pointer speed and the scroll direction.
+- A setting that lets the PC play the sound too.
 - A separate process for the stream engine, with a watchdog in the UI. If
   the engine does not respond, the watchdog stops it, and the UI shows a
   message. The device does not freeze.
@@ -172,6 +181,7 @@ on the PC, Moonlight HW asks you before it quits that app.
 | PC list | A open, Y remove the PC from the list, X settings, SELECT refresh the status of all PCs, B exit the app |
 | App list | A start or resume, Y quit the app that is open on the PC, X settings, B back |
 | Stream | Press MENU for the stream menu (B resumes the stream). Hold MENU to use the pad as a mouse. To disconnect at once, hold START+SELECT+L1+R1 for one second. |
+| Send key (in the stream menu) | A send the key and go back to the stream, L1 and R1 move one page, B back to the stream menu, MENU back to the stream |
 
 ### Settings
 
@@ -183,8 +193,12 @@ To open the settings, press X in the PC list or in the app list.
 | Bitrate | 10 Mbps | 5 to 30 Mbps |
 | Video codec | Automatic | HEVC, H.264 |
 | Swap A/B and X/Y | Off: the bottom button sends A, as on an Xbox pad | On: each button sends its printed letter |
-| Quit the PC app on disconnect | Off | On |
+| Rumble strength | 100% | Off, or 5% to 95% in steps of 5%. Left and right change it. Press A for a 0.5 s test rumble. |
+| Mouse pointer speed | 100% | 50%, 75%, 125%, 150%, 200% |
+| Mouse scroll direction | Normal: push the left stick up to scroll up | Reverse |
+| Play the sound on the PC too | Off | On: the speakers of the PC also play the sound |
 | Wi-Fi power saving off while streaming | On (recommended) | Off |
+| Quit the PC app on disconnect | Off | On |
 | Let the PC optimize game settings | Off | On |
 | Check for updates at start | On | Off |
 | Check for updates now | Shows the installed version. Press A to check. | |
@@ -317,9 +331,9 @@ release. All installed copies then offer the release at their next start.
 
 | Path | Contents |
 |---|---|
-| `src/stream_main.c` | `moonlight-tsp-stream`: the stream engine, also a CLI (`info`, `list`, `pair`, `stream`, `quit`, `reset-display`, `update-check`, `update-fetch`) |
+| `src/stream_main.c` | `moonlight-tsp-stream`: the stream engine, also a CLI (`info`, `list`, `pair`, `stream`, `quit`, `reset-display`, `rumble-test`, `update-check`, `update-fetch`) |
 | `src/video_cedar.c`, `cedar*.c`, `g2d_rot.c`, `disp.c`, `ion.c` | video: Cedar decode, G2D rotation, display layer, ION buffers |
-| `src/audio_alsa.c`, `src/input_evdev.c`, `src/wifi_ps.c` | audio, controller and mouse input, Wi-Fi power saving |
+| `src/audio_alsa.c`, `src/input_evdev.c`, `src/rumble.c`, `src/wifi_ps.c` | audio, controller, mouse and key input, rumble, Wi-Fi power saving |
 | `src/update.c`, `src/update_manifest.c` | updates: the GitHub check, the download, its checks and the stage folder |
 | `src/ui_*.c` | `moonlight-tsp-ui`: the SDL2 interface, with the battery and Wi-Fi status (`ui_status.c`) |
 | `include/` | vendor ABI headers (CedarC 1.3.0, sunxi disp2, G2D) with layout checks |

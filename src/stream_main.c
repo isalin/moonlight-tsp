@@ -34,11 +34,12 @@
 #include "cedar_sync.h"
 #include "fdguard.h"
 #include "input_evdev.h"
+#include "rumble.h"
 #include "update.h"
 #include "video_cedar.h"
 #include "wifi_ps.h"
 
-#define ENGINE_VERSION "0.3.1"
+#define ENGINE_VERSION "0.4.0"
 #define DEFAULT_KEYDIR "/mnt/UDISK/trimui-tools/moonlight-tsp/keys"
 #define LEGACY_KEYDIR "/.cache/moonlight"
 #define DEFAULT_UPDATE_URL "https://github.com/isalin/moonlight-tsp/releases"
@@ -65,6 +66,10 @@ static struct {
     int ipc_fd;
     int no_input;
     int keep_wifi_ps;
+    int rumble;
+    int local_audio;
+    int pointer_speed;
+    int scroll_reverse;
     const char *update_url, *ca_file, *stage, *unzip;
 } O = {
     .keydir = DEFAULT_KEYDIR,
@@ -143,6 +148,7 @@ static uint64_t now_ns(void)
 static void fatal_signal(int sig)
 {
     video_cedar_emergency_off();
+    rumble_emergency_off();
     signal(sig, SIG_DFL);
     raise(sig);
 }
@@ -170,6 +176,7 @@ static void *signal_thread(void *arg)
         default:
             /* A second signal while stopping: do not hang. */
             video_cedar_emergency_off();
+            rumble_emergency_off();
             _exit(128 + sig);
         }
     }
@@ -489,6 +496,13 @@ static void cl_status(int status)
     ipc_send("network %s", status == CONN_STATUS_POOR ? "poor" : "okay");
 }
 
+static void cl_rumble(unsigned short ctrl, unsigned short low,
+                      unsigned short high)
+{
+    if (ctrl == 0)
+        rumble_set(low, high);
+}
+
 static CONNECTION_LISTENER_CALLBACKS listener = {
     .stageStarting = cl_stage_starting,
     .stageFailed = cl_stage_failed,
@@ -496,6 +510,7 @@ static CONNECTION_LISTENER_CALLBACKS listener = {
     .connectionTerminated = cl_terminated,
     .logMessage = cl_log,
     .connectionStatusUpdate = cl_status,
+    .rumble = cl_rumble,
 };
 
 /* Shown to the user in the UI's "Disconnected" dialog. */
@@ -662,6 +677,7 @@ static void set_paused(int paused)
 {
     video_cedar_set_visible(!paused);
     input_set_forwarding(!paused);
+    rumble_pause(paused);
     if (!paused)
         LiRequestIdrFrame();    /* repaint a static host screen at once */
 }
@@ -689,7 +705,15 @@ static enum stop_reason ipc_poll(char *buf, size_t *len, int *quit_app)
         } else if (strcmp(line, "resume") == 0) {
             set_paused(0);
         } else if (strcmp(line, "guide") == 0) {
-            input_send_guide();
+            if (!O.no_input)
+                input_send_guide();
+        } else if (strncmp(line, "key ", 4) == 0) {
+            int vk, mods = 0;
+
+            /* --no-input sends no input at all, also no keys. */
+            if (!O.no_input && sscanf(line + 4, "%i %i", &vk, &mods) >= 1 &&
+                vk > 0 && vk < 0x100)
+                input_send_key(vk, mods);
         } else if (strcmp(line, "mouse on") == 0) {
             input_set_mouse(1);
         } else if (strcmp(line, "mouse off") == 0) {
@@ -713,11 +737,22 @@ static enum stop_reason ipc_poll(char *buf, size_t *len, int *quit_app)
     return STOP_NONE;
 }
 
+/* A number argument, clamped to LO-HI. */
+static int range_arg(const char *s, int lo, int hi)
+{
+    int v = atoi(s);
+
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
 static int cmd_stream(PSERVER_DATA srv, const char *app)
 {
     STREAM_CONFIGURATION sc;
     struct input_options io = { .swap_abxy = O.swap_abxy,
-                                .mouse = O.mouse };
+                                .mouse = O.mouse,
+                                .rumble = O.rumble > 0,
+                                .pointer_speed = O.pointer_speed,
+                                .scroll_reverse = O.scroll_reverse };
     struct itimerspec its = { { 1, 0 }, { 1, 0 } };
     struct totals tot;
     enum stop_reason why = STOP_NONE;
@@ -761,11 +796,13 @@ static int cmd_stream(PSERVER_DATA srv, const char *app)
     if (O.audio_device != NULL)
         audio_alsa_set_device(O.audio_device);
 
-    printf("stream: app %d, %dx%d@%d, %d kbps, codec %s\n", app_id, sc.width,
-           sc.height, sc.fps, sc.bitrate, O.codec);
+    printf("stream: app %d, %dx%d@%d, %d kbps, codec %s%s\n", app_id,
+           sc.width, sc.height, sc.fps, sc.bitrate, O.codec,
+           O.local_audio ? ", sound also on the host" : "");
     printf("fdguard: %s\n", g_fdguard ? "interposed" : "NOT interposed");
     fflush(stdout);
-    rc = gs_start_app(srv, &sc, app_id, O.sops != 0, false, 0x1);
+    rc = gs_start_app(srv, &sc, app_id, O.sops != 0, O.local_audio != 0,
+                      0x1);
     if (rc != GS_OK) {
         if (rc == GS_NOT_SUPPORTED_MODE)
             fprintf(stderr, "host rejects %dx%d@%d\n", sc.width, sc.height,
@@ -798,6 +835,8 @@ static int cmd_stream(PSERVER_DATA srv, const char *app)
     atomic_store(&g_phase, PH_STREAMING);
     if (atomic_load(&g_stop_sig))
         why = STOP_SIGNAL;
+    if (O.rumble > 0 && !O.no_input)
+        rumble_start(RUMBLE_GPIO_VALUE, (unsigned)O.rumble);
 
     if (!O.no_input && input_start(&io, g_evpipe[1]) != 0)
         fprintf(stderr, "input: start failed\n");
@@ -948,6 +987,7 @@ static int cmd_stream(PSERVER_DATA srv, const char *app)
         input_set_forwarding(0);
         input_stop();
     }
+    rumble_stop();
     {
         double secs = (double)(now_ns() - t_start) / 1e9, dec, alsa;
 
@@ -1016,9 +1056,11 @@ static void usage(FILE *f)
 "  unpair\n"
 "  stream APP           stream an app (name or id)\n"
 "  quit                 quit the app running on the host\n"
-"  reset-display        remove a leftover video layer and restore Wi-Fi\n"
-"                       power save after a killed engine\n"
+"  reset-display        remove a leftover video layer, stop the rumble\n"
+"                       motor and restore Wi-Fi power save after a killed\n"
+"                       engine\n"
 "  input-test           print pad events (Ctrl-C ends)\n"
+"  rumble-test [PCT]    rumble for 0.5 s at PCT (100)\n"
 "  update-check         ask GitHub for a newer release\n"
 "  update-fetch VER     download release VER into the stage folder\n"
 "\n"
@@ -1034,6 +1076,11 @@ static void usage(FILE *f)
 "  --audio-device NAME  ALSA PCM instead of the low-latency path\n"
 "  --swap-abxy          exchange A/B and X/Y\n"
 "  --mouse              start in mouse mode (the pad drives the mouse)\n"
+"  --pointer-speed PCT  mouse pointer speed, 25-400 (100)\n"
+"  --scroll-reverse     the left stick scrolls the other way\n"
+"  --rumble PCT         pass the host's rumble to the motor at the\n"
+"                       strength setting PCT (1-100)\n"
+"  --local-audio        the host also plays the sound\n"
 "  --no-input           view only\n"
 "  --sops               let the host optimise game settings\n"
 "  --quit-after         quit the host app when the stream ends\n"
@@ -1080,6 +1127,10 @@ int main(int argc, char **argv)
         { "stage", required_argument, NULL, 'G' },
         { "unzip", required_argument, NULL, 'X' },
         { "version", no_argument, NULL, 'V' },
+        { "rumble", required_argument, NULL, 'r' },
+        { "local-audio", no_argument, NULL, 'L' },
+        { "pointer-speed", required_argument, NULL, 'p' },
+        { "scroll-reverse", no_argument, NULL, 'O' },
         { NULL, 0, NULL, 0 },
     };
     SERVER_DATA srv;
@@ -1109,8 +1160,13 @@ int main(int argc, char **argv)
         case 't': O.stats = 1; break;
         case 'I': O.ipc_fd = atoi(optarg); break;
         case 'W': O.keep_wifi_ps = 1; break;
+        case 'r': O.rumble = range_arg(optarg, 0, 100); break;
+        case 'L': O.local_audio = 1; break;
+        case 'p': O.pointer_speed = range_arg(optarg, 25, 400); break;
+        case 'O': O.scroll_reverse = 1; break;
         case 'R':
             wifi_ps_restore();
+            rumble_reset(RUMBLE_GPIO_VALUE);
             return video_cedar_reset_display() == 0 ? 0 : 1;
         case 'v': O.verbose++; break;
         case 'Z': usage(stdout); return 0;
@@ -1131,10 +1187,14 @@ int main(int argc, char **argv)
 
     if (strcmp(cmd, "reset-display") == 0) {
         wifi_ps_restore();
+        rumble_reset(RUMBLE_GPIO_VALUE);
         return video_cedar_reset_display() == 0 ? 0 : 1;
     }
     if (strcmp(cmd, "input-test") == 0)
         return input_dump();
+    if (strcmp(cmd, "rumble-test") == 0)
+        return rumble_test(RUMBLE_GPIO_VALUE, arg != NULL ?
+                           (unsigned)range_arg(arg, 0, 100) : 100);
     is_update = strcmp(cmd, "update-check") == 0 ||
                 strcmp(cmd, "update-fetch") == 0;
     if (strcmp(cmd, "info") != 0 && strcmp(cmd, "list") != 0 &&

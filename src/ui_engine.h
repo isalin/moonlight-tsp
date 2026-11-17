@@ -52,6 +52,14 @@ void engine_close(struct engine *e);
 int engine_run_reset(const char *path, const char *log, int timeout_ms);
 
 /*
+ * Starts ARGV (ARGV[0] is PATH) with no UI socket, appending its output
+ * to LOG, and returns at once; the caller reaps *PID. For short commands
+ * next to a job, such as the rumble test.
+ */
+int engine_spawn_plain(const char *path, const char *const *argv,
+                       const char *log, pid_t *pid);
+
+/*
  * Writes what each thread of PID is doing to PATH before a watchdog kill:
  * state, wait channel, the syscall it is in (with the descriptors of a
  * poll), its kernel stack, and the words on its user stack that point into

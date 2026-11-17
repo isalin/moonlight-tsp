@@ -235,6 +235,12 @@ int engine_run_reset(const char *path, const char *log, int timeout_ms)
     }
 }
 
+int engine_spawn_plain(const char *path, const char *const *argv,
+                       const char *log, pid_t *pid)
+{
+    return spawn(path, argv, log, 1, -1, pid);
+}
+
 /* ---- hang report ------------------------------------------------------ */
 
 #define DUMP_MAPS 64

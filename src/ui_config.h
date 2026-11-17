@@ -19,6 +19,11 @@ struct ui_config {
     int quit_after;     /* quit the host app when the stream ends */
     int wifi_ps_off;    /* Wi-Fi power save off while streaming */
     int sops;           /* let the host optimise game settings */
+    int rumble;         /* rumble strength in percent, 0-100 in steps of
+                         * 5; 0 is off */
+    int local_audio;    /* the PC also plays the sound */
+    int pointer_speed;  /* mouse pointer speed in percent */
+    int scroll_reverse; /* the left stick scrolls the other way */
     int update_check;   /* ask GitHub for a new version at start */
     char update_skip[24];   /* a version the user chose to skip */
     int last_host;

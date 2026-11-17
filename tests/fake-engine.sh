@@ -7,12 +7,12 @@
 # "error"; FAKE_FETCH=fail makes update-fetch fail after some progress.
 state=${FAKE_STATE:-/tmp/fake-engine}
 mkdir -p "$state"
-host="" ipc=3 cmd="" arg=""
+host="" ipc=3 cmd="" arg="" all="$*"
 while [ $# -gt 0 ]; do
     case $1 in
     --host) host=$2; shift 2 ;;
     --keydir|--fps|--bitrate|--codec|--port|--stage|--update-url|\
-    --ca-file|--unzip) shift 2 ;;
+    --ca-file|--unzip|--pointer-speed|--rumble) shift 2 ;;
     --ipc-fd) ipc=$2; shift 2 ;;
     --*) shift ;;
     *) if [ -z "$cmd" ]; then cmd=$1; else arg=$1; fi; shift ;;
@@ -26,6 +26,7 @@ paired=1
 
 case $cmd in
 reset-display) exit 0 ;;
+rumble-test) echo "rumble-test $arg" >> "$state/rumble.log"; exit 0 ;;
 esac
 sleep 0.3
 case $cmd in
@@ -93,13 +94,14 @@ stream)
         exit 1
     fi
     echo "$arg" > "$state/running"
+    echo "$all" > "$state/stream-args"
     say "started"
     t=0
     while :; do
         if read -r -t 1 line <&"$ipc"; then
             echo "$line" >> "$state/ipc.log"
             case $line in
-            mouse*) menu_at=$((t + 2)) ;;
+            mouse*|key*) menu_at=$((t + 2)) ;;
             stop) say "ended"; exit 0 ;;
             quit-app) echo 0 > "$state/running"; say "ended"; exit 0 ;;
             esac

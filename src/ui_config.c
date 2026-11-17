@@ -16,6 +16,8 @@ void config_defaults(struct ui_config *c)
     c->codec = CODEC_AUTO;
     c->wifi_ps_off = 1;
     c->update_check = 1;
+    c->rumble = 100;
+    c->pointer_speed = 100;
 }
 
 /* Copies printable text only (no newlines in the file format). */
@@ -68,6 +70,18 @@ int config_load(struct ui_config *c, const char *path)
             c->wifi_ps_off = atoi(v) != 0;
         else if (strcmp(line, "sops") == 0)
             c->sops = atoi(v) != 0;
+        else if (strcmp(line, "rumble_strength") == 0) {
+            /* 5% steps; a value that is not 0 stays on. */
+            int r = clamp(atoi(v), 0, 100, 100);
+
+            c->rumble = r == 0 ? 0 : r < 5 ? 5 : (r + 2) / 5 * 5;
+        }
+        else if (strcmp(line, "local_audio") == 0)
+            c->local_audio = atoi(v) != 0;
+        else if (strcmp(line, "pointer_speed") == 0)
+            c->pointer_speed = clamp(atoi(v), 25, 400, 100);
+        else if (strcmp(line, "scroll_reverse") == 0)
+            c->scroll_reverse = atoi(v) != 0;
         else if (strcmp(line, "update_check") == 0)
             c->update_check = atoi(v) != 0;
         else if (strcmp(line, "update_skip") == 0)
@@ -106,6 +120,9 @@ int config_save(const struct ui_config *c, const char *path)
             c->codec == CODEC_H264 ? "h264" : "auto");
     fprintf(f, "swap_abxy=%d\nquit_after=%d\nwifi_ps_off=%d\nsops=%d\n",
             c->swap_abxy, c->quit_after, c->wifi_ps_off, c->sops);
+    fprintf(f, "rumble_strength=%d\nlocal_audio=%d\npointer_speed=%d\n"
+            "scroll_reverse=%d\n", c->rumble, c->local_audio,
+            c->pointer_speed, c->scroll_reverse);
     fprintf(f, "update_check=%d\n", c->update_check);
     if (c->update_skip[0] != '\0')
         fprintf(f, "update_skip=%s\n", c->update_skip);

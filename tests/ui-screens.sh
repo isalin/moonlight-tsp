@@ -36,6 +36,34 @@ start() {
     k "status ${STATUS:-78 discharging -55}" 0.5
 }
 shot() { k "shot $shots/$1.bmp" 0.4; }
+# The rows of the settings screen and the stream menu, in the order of
+# their enums in src/ui_main.c (checked below), so that the steps go to a
+# row by name.
+SETTINGS_ROWS="fps bitrate codec swap rumble pointer scroll local_audio
+    wifi_ps quit_after sops update_check update_now"
+MENU_ROWS="resume mouse keys guide disconnect quit"
+enum_rows() {
+    sed -n "/^enum { $1/,/};/p" /src/src/ui_main.c | grep -o "\b$1[A-Z_]*" |
+        sed "s/^$1//" | tr 'A-Z\n' 'a-z '
+}
+[ "$(enum_rows ST_)" = "$(echo $SETTINGS_ROWS) " ] ||
+    echo "FAIL: SETTINGS_ROWS is not the ST_ enum: $(enum_rows ST_)"
+[ "$(enum_rows MI_)" = "$(echo $MENU_ROWS) " ] ||
+    echo "FAIL: MENU_ROWS is not the MI_ enum: $(enum_rows MI_)"
+row_index() {
+    local i=0 r
+    for r in $1; do
+        [ "$r" = "$2" ] && { echo $i; return; }
+        i=$((i + 1))
+    done
+    echo "FAIL: no row $2" >&2
+    echo 0
+}
+# rows TABLE FROM TO: Down from row FROM to row TO.
+rows() {
+    local n=$(( $(row_index "$1" "$3") - $(row_index "$1" "$2") ))
+    while [ "$n" -gt 0 ]; do k down 0.1; n=$((n - 1)); done
+}
 finish() {
     k quit 0.5
     timeout 10 sh -c "while kill -0 $pid 2>/dev/null; do sleep 0.2; done" ||
@@ -70,13 +98,36 @@ shot 07-switch-app-dialog
 k b
 k x
 shot 08-settings
-k down; k right; k down; k down; k down; k down
+rows "$SETTINGS_ROWS" fps bitrate; k right
+# Rumble: Right at 100% stays at 100% (no wrap-around), then 4 x Left
+# gives 80%, and A runs one test rumble at 80%.
+rows "$SETTINGS_ROWS" bitrate rumble; k right
+k left 0.1; k left 0.1; k left 0.1; k left
+shot 09c-settings-rumble
+k a 0.8
+case $(cat "$FAKE_STATE/rumble.log" 2>/dev/null) in
+"rumble-test 80") echo "rumble test: 80%" ;;
+*) echo "FAIL: rumble test log: $(cat "$FAKE_STATE/rumble.log" 2>&1)" ;;
+esac
+rows "$SETTINGS_ROWS" rumble pointer; k right
 shot 09-settings-changed
+rows "$SETTINGS_ROWS" pointer local_audio; k right
+shot 09b-settings-pc-sound
 k b
 k up; k up; k a 1.2
 shot 10-connecting
 sleep 2
 shot 11-streaming
+args=$(cat "$FAKE_STATE/stream-args" 2>/dev/null)
+for a in "--bitrate 15000" "--pointer-speed 125" --local-audio "--rumble 80"; do
+    case " $args " in
+    *" $a "*) echo "stream args: $a" ;;
+    *) echo "FAIL: stream args have no $a: $args" ;;
+    esac
+done
+case " $args " in
+*" --scroll-reverse "*) echo "FAIL: --scroll-reverse with Normal" ;;
+esac
 finish
 
 # Stream menu and disconnect, then pairing the unpaired host.
@@ -93,7 +144,22 @@ grep -A1 "^mouse on$" "$FAKE_STATE/ipc.log" | grep -q "^resume$" ||
     echo "FAIL: mouse on not followed by resume"
 sleep 3.2
 shot 12b-stream-menu-mouse
-k down; k down; k down; k a 0.2
+k down
+shot 12e-stream-menu-mouse-help
+k up
+# Send key: Up wraps to the last key and scrolls; Alt+Tab is the fifth.
+rows "$MENU_ROWS" resume keys; k a
+k up
+shot 12c-send-key-end
+k down
+for _ in 1 2 3 4; do k down 0.1; done
+shot 12d-send-key
+k a 0.3
+grep -A1 "^resume$" "$FAKE_STATE/ipc.log" | grep -q "^key 9 4$" &&
+    echo "send key: resume, then Alt+Tab" ||
+    echo "FAIL: no resume then \"key 9 4\" in the ipc log"
+sleep 3.2
+rows "$MENU_ROWS" resume disconnect; k a 0.2
 shot 13-disconnecting
 sleep 1.5
 shot 14-apps-after
@@ -209,10 +275,10 @@ expect_exit() {
 }
 cfg() { grep -q "^$1\$" "$MLTSP_DATA/config.ini" && echo "config: $1" ||
         echo "FAIL: config has no \"$1\""; }
-# Settings, then the row "Check for updates now" (the last of nine).
+# Settings, then the row "Check for updates now".
 settings_update_now() {
     k x
-    for _ in 1 2 3 4 5 6 7 8; do k down 0.1; done
+    rows "$SETTINGS_ROWS" fps update_now
 }
 
 # Nothing new: the start-up check runs once, quietly. MLTSP_STARTED_FILE
@@ -225,7 +291,7 @@ sleep 5
 [ "$(grep -c '^update-check$' "$FAKE_STATE/updates.log" 2>/dev/null)" = 1 ] &&
     echo "start-up check: once" || echo "FAIL: start-up check count"
 k x
-for _ in 1 2 3 4 5 6 7; do k down 0.1; done
+rows "$SETTINGS_ROWS" fps update_check
 shot 26-settings-update-check
 k down
 shot 27-settings-update-now
@@ -291,7 +357,7 @@ finish
 # Check at start Off: no check at all.
 start update-off
 k x
-for _ in 1 2 3 4 5 6 7; do k down 0.1; done
+rows "$SETTINGS_ROWS" fps update_check
 k right; k b
 finish
 cfg update_check=0

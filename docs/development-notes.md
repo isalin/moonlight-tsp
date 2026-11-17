@@ -258,12 +258,13 @@ stream, libgamestream from moonlight-embedded `33142e5` (`client.c`,
 `src/audio_alsa.c`, `src/input_evdev.c`, `src/wifi_ps.c`.
 
 - **Commands:** `info`, `list`, `pair [PIN]`, `unpair`, `stream APP`, `quit`
-  (all need `--host`), plus `reset-display` (also `--reset-display`) and
-  `input-test`. `--help` lists the stream options (resolution, fps,
+  (all need `--host`), plus `reset-display` (also `--reset-display`),
+  `input-test` and `rumble-test`. `--help` lists the stream options (resolution, fps,
   bitrate, codec, audio latency/device, `--swap-abxy`, `--quit-after`,
-  `--keep-wifi-ps`, `--duration`, `--stats`, `--ipc-fd`).
+  `--keep-wifi-ps`, `--rumble`, `--local-audio`, `--pointer-speed`,
+  `--scroll-reverse`, `--duration`, `--stats`, `--ipc-fd`).
   `reset-display` also restores Wi-Fi power save after a killed engine (see
-  "Wi-Fi power save").
+  "Wi-Fi power save") and turns the rumble motor off.
 - **Identity:** `--keydir` defaults to
   `/mnt/UDISK/trimui-tools/moonlight-tsp/keys`. If it has no
   `uniqueid.dat`, the stock identity in `/.cache/moonlight` (`client.pem`,
@@ -635,7 +636,7 @@ DE import cache were back at the baseline after every run unless noted.
   command it receives to `ipc.log`; the script checks that choosing
   "Mouse mode" sends `mouse on` followed by `resume`, and the fake engine
   reports another MENU press 2 s later (shot 12b shows "Mouse mode: On").
-  It saves 41 screenshots to
+  It saves 46 screenshots to
   `build/shots/` (PNG). Shots 26-36 cover updates: the two settings rows,
   the manual check (busy, newest, error), the offer, the download, a
   stopped and a failed download, and the "installed" and "rolled back"
@@ -659,7 +660,7 @@ DE import cache were back at the baseline after every run unless noted.
   `reset-display` after every stream. A later run added a silent engine:
   "heartbeat lost", a `hang.log` with its threads, the kill and the "Stream
   closed" dialog (shot 25).
-- `tests/input-test.c` (`make check`, 80 checks) compiles
+- `tests/input-test.c` (`make check`, 90 checks since 0.4.0) compiles
   `src/input_evdev.c` with stubbed `Li*` calls and feeds it events and
   times: pad mapping and A/B/X/Y swap, the MENU tap and hold rules, masking
   across mode changes, the mouse layout, trigger hysteresis, pointer speed,
@@ -818,6 +819,149 @@ and the Paused screen (2026-11-16).
   no state change, the UI used 4 ticks of CPU in 60 s (about 0.07% of one
   core), with the 5 s poll included.
 
+### Rumble, Send key and mouse settings (0.4.0)
+
+The first of three releases with the features users expect (2026-11-17):
+rumble, a Send key list, sound on the PC, pointer speed and scroll
+direction. 0.5.0 adds the text keyboard, host names and ports, rename,
+Wake-on-LAN, box art and app sorting; 0.6.0 adds an overlay layer for a
+live keyboard and stream figures over the video, and lower resolutions.
+
+- **Rumble** (`src/rumble.c`, no SDL): the motor is GPIO 227 (PH3), which
+  `runtrimui.sh` exports at boot with direction `out`; it is on or off
+  only. `rumble_start(path, percent)` opens the value file once
+  (`O_WRONLY|O_CLOEXEC`), registers it with fdguard as `rumble gpio`,
+  writes `0` and starts one thread. common-c's `rumble(ctrl, low, high)`
+  callback (controller 0 only) stores the stronger motor. The thread makes
+  software PWM with a 20 ms period. Pulses shorter than 4 ms
+  (`RUMBLE_MIN_ON_NS`, an estimate; the user felt it, see below) hardly
+  move the motor,
+  so the user's setting (`--rumble PCT`) sets the pulse for the host's
+  full strength from 4 ms at 5% to the full 20 ms at 100%, in equal
+  steps (11.6 ms at 50%). The host's strength scales that pulse, with at
+  least 4 ms for a weak value. Each 5% step is stronger up to 95%; 95%
+  and 100% are both constantly on (a gap under 1 ms). Off and constantly
+  on sleep on a condition variable, so there are no wake-ups when nothing
+  rumbles. Each write is `pwrite(fd, "1"/"0", 1, 0)`, and only on a
+  change. A new value starts a new period, so the same value again does
+  not wake the thread: a host that repeats its value more often than the
+  pulse would otherwise keep the motor on. Pause (the stream menu) turns
+  the motor off and resume gives the last value again. The motor is off
+  at stop (`rumble_stop` after `input_stop`, before `LiStopConnection`),
+  in the fatal-signal handler and on a second signal
+  (`rumble_emergency_off`: one write and an atomic flag, after which the
+  thread does not turn the motor on again, also if it wrote its 1 just
+  after the handler's 0), and in `reset-display`, which the UI and
+  `launch.sh` already run after a killed engine. Without
+  the file the engine logs `rumble: PATH: ERR; no rumble` once and
+  continues. `LI_CCAP_RUMBLE` goes in the arrival event only with
+  `--rumble`, so the host does not send rumble that nothing plays.
+- **Rumble strength setting:** the first device test (2026-11-17) gave 0.5 s
+  at 30%, 60% and 100% (6, 12 and 20 ms on in each 20 ms). The user felt
+  three different strengths and the motor stopped at once, but 30% felt
+  like a rattle. So the user asked for a strength setting instead of
+  On/Off: "Rumble strength", Off or 5-100% in steps of 5 (config key
+  `rumble_strength`, default 100, rounded to a step), changed with Left
+  and Right with no wrap-around. A on the row runs `moonlight-tsp-stream
+  rumble-test PCT`: one 0.5 s rumble at the host's full strength, which
+  is the strongest rumble that a game gives at that setting. Test build
+  0.3.1.3 (2026-11-17, with the code review fixes and the 4-20 ms scale)
+  was installed by stage-and-move while the app was closed, for the
+  user's hands-on test of the setting. The user reported that the
+  setting works, and that the test rumble is felt also at 5% (4 ms in
+  each 20 ms). The UI
+  starts it with `engine_spawn_plain` (no IPC socket, output appended to
+  `engine.log`), next to any job, and reaps it in the main loop; a
+  second A while it runs does nothing. `rumble_test` blocks SIGTERM,
+  SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGALRM and SIGPIPE (the
+  blockable signals that end a process) before its thread starts and
+  waits in `sigtimedwait` until a monotonic deadline, so a stop signal
+  ends it with the motor off (exit 128 + the signal). Without a strength
+  the UI passes no `--rumble`, and at Off the row shows no "A Test" hint
+  and A does nothing. A test that still runs when a stream starts cannot
+  leave the motor on: the stream engine writes `0` at start and only
+  rumbles after the connection, and the test ends with `0` after 0.5 s.
+- **Send key:** a new stream menu item opens `S_KEYS`, a list of 12 keys
+  and combinations, with a help text for each. A sends `resume`, then
+  `key VK MODS` (the order Guide uses), and the UI goes back to the
+  stream. In the engine, `input_send_key` (under `I.lock`) presses the
+  modifiers in the order Ctrl, Alt, Shift, Win, each event with the
+  growing `MODIFIER_*` mask, then the key down with the 0x80 flag. It
+  holds the key 50 ms without the lock (a game that reads the key state
+  once a frame can miss a shorter press), then sends the key up and releases the modifiers in reverse order. The
+  IPC parser accepts VK codes 1-255 only. With `--no-input` the engine
+  ignores `key` and `guide`.
+- **Sound on the PC:** `--local-audio` sets `localaudio` in
+  `gs_start_app` (libgamestream sends it as `localAudioPlayMode` in both
+  the launch and the resume request); Sunshine then also plays the sound
+  on the PC.
+- **Pointer speed and scroll direction:** `--pointer-speed PCT` (clamped
+  to 25-400, the UI offers 50-200) scales the 1800 px/s pointer maximum;
+  `--scroll-reverse` inverts both wheel axes.
+- **Settings order:** stream (frame rate, bitrate, codec), controls
+  (swap, rumble, pointer speed, scroll direction), sound, Wi-Fi, PC (quit
+  on disconnect, game optimization) and updates. The new config keys are
+  `rumble_strength` (default 100, rounded to a 5% step; 1-4 become 5),
+  `local_audio`, `pointer_speed` (default 100,
+  clamped to 25-400) and `scroll_reverse`; older versions ignore them.
+  The UI passes an engine option only when its value is not the default.
+- **Stream menu:** rows 52 px high at a 60 px pitch, so 8 items fit, with
+  a help text for the selected item below the figures panel.
+- **Tests:** `tests/rumble-test.c` (`make check`) uses a normal file as the
+  value file: strengths and settings to pulse lengths (no pulse under
+  4 ms, each 5% step stronger), a missing file, a refused stray close, on
+  and off, a PWM share between 20% and 80% (from the host's strength and
+  from the setting), a weak value that the host sends again every 1 ms
+  (the share stays under 50%), pause and resume, stop, a second session
+  with an emergency off during PWM (the motor stays off for 100 ms with
+  new values and a resume), a third session, the 0.5 s test (490 to
+  1500 ms), a SIGTERM and a SIGUSR1 during the test (in a child: exit
+  128 + the signal, motor off) and `rumble_reset`. It waits for a motor
+  state by polling with a time limit, not with fixed sleeps. Removing the
+  same-value check, the emergency flag or the new setting scale each
+  makes it fail.
+  `tests/input-test.c` has 90 checks, with pointer speed, reversed
+  scroll, the rumble capability in the arrival event (`arrival_caps`),
+  the key sequences with modifiers and the 50 ms hold.
+  `tests/ui-screens.sh` reads the settings and stream menu rows from
+  tables that it checks against the enums in `src/ui_main.c`, so a new row
+  does not break the Down counts. It checks the stream arguments
+  (`--pointer-speed 125`, `--local-audio`, `--rumble 80`, no
+  `--scroll-reverse`), that Right at 100% stays at 100% and A runs
+  `rumble-test 80` (shot 09c), and that Alt+Tab sends `resume` and then
+  `key 9 4`.
+- **Stream test of 0.3.1.3 (2026-11-17):** the engine ran from SSH with
+  `--rumble 100 --local-audio --pointer-speed 200 --scroll-reverse` and
+  streamed the htpc's Desktop (already running there, so it resumed), while
+  the UI waited in its menus. A small test relay (not in this repository)
+  made a socketpair, started the engine with `--ipc-fd 3` and sent the UI's
+  lines: `stats on`, `pause`, `resume`, `key 68 8` (Win+D) twice, `mouse
+  on`, `mouse off` and `stop`. Results:
+  - Connected in 1.4 s. The input line showed `pointer 200%, scroll
+    reversed`, and `rumble: on ... at 100%`.
+  - Win+D reached the PC: in the same second the frame rate fell from 60
+    to 21-26 fps and the bitrate from 4-9 Mbit/s to 0.23 Mbit/s (a still
+    desktop). The second Win+D gave 60 fps and 9 Mbit/s again.
+  - Pause hid the video (181 frames decoded while hidden), and resume
+    showed it again. `stop` ended the stream normally: 32 s, 0 errors,
+    0 lost, largest frame gap 76 ms, none over 100 ms.
+  - The motor value was 0 during the stream, while paused and after it
+    (the Desktop sends no rumble). Power save was off during the stream
+    with its marker file, and on again after it, with the marker gone.
+  - After the streams only the fb layer was on, with `dmabuf: cache[2]`
+    and one orphaned 4096-byte ION buffer (the flush dummy, as before).
+  - The htpc sent no audio at all ("No audio traffic was ever received
+    from the host!"), also in a 14 s control stream without
+    `--local-audio`: it sends no audio packets while the PC plays no
+    sound. So sound on the PC still needs a test with sound playing.
+    Pointer speed and scroll direction need the pad, and rumble a game.
+- **Release 0.4.0 (2026-11-17):** the user accepted the test results.
+  The release has the code of test build 0.3.1.3 with the version set to
+  0.4.0. `scripts/release.sh 0.4.0` (dry run) passed `make check`; two more
+  package builds gave the same zip, and `scripts/update-test.sh` passed
+  (32 and 38 checks). The README screenshots were made again: the stream
+  menu and the settings changed, and the PC list shows the new version.
+
 ## First launch on the device
 
 The user launched Moonlight HW from the Apps menu on 2026-11-15 (device clock
@@ -974,7 +1118,8 @@ Changes for the next stream:
   (`-Wl,--export-dynamic-symbol=close`, like `SemTimedWait`), so every
   caller in the process, including dlopened vendor libraries, goes through
   it. The engine registers its long-lived descriptors (stdout, stderr, the
-  UI socket, both ends of the wake pipe, the timerfd). A `close()` of one
+  UI socket, both ends of the wake pipe, the timerfd, and since 0.4.0 the
+  rumble GPIO). A `close()` of one
   of them that does not come from the owner's `fdguard_close()` is refused
   (returns 0) and logged at most 8 times as `fdguard: refused close(N) of
   NAME from lib+0xOFF` with a backtrace (`dladdr` names exported
@@ -1175,8 +1320,9 @@ through the menu; the audio drops and xruns are not explained yet.
    to 2452 MHz" line in `/tmp/moonlight-obss-filter.log`.
 2. Mouse mode on the device: after the review fixes the user reported
    that it "seems to be working great". Not yet checked: the
-   `input: mouse mode on/off` log lines. Possible follow-ups: a pointer
-   speed setting and a setting to start streams in mouse mode.
+   `input: mouse mode on/off` log lines. 0.4.0 adds the pointer speed
+   setting; a possible follow-up is a setting to start streams in mouse
+   mode.
 3. Explain the audio packet queue overflow and xruns in the short
    streams after the clock fix.
    Code review findings left open (2026-11-15): if the launcher is
